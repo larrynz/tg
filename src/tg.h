@@ -42,11 +42,25 @@
 #define FIRST_STEP_LIGHT 0
 
 #define NSTEPS 4
+
+enum amp_fail_reason {
+	AMP_OK = 0,
+	AMP_NO_SIGNAL = 1,
+	AMP_WRONG_LIFT_ANGLE = 2,
+	AMP_NOISE_TOO_HIGH = 3,
+	AMP_TIC_TOC_DETECTION_FAILED = 4,
+	AMP_PERIOD_ESTIMATION_FAILED = 5,
+	AMP_THRESHOLD_EXCEEDED = 6,
+	AMP_TIC_TOC_OUT_OF_RANGE = 7,
+	AMP_TIC_TOC_DIFF_TOO_LARGE = 8
+};
+
 #define PA_SAMPLE_RATE 44100u
 #define PA_BUFF_SIZE (PA_SAMPLE_RATE << (NSTEPS + FIRST_STEP))
 
 #define OUTPUT_FONT 40
 #define OUTPUT_WINDOW_HEIGHT 70
+#define OUTPUT_STATS_HEIGHT 120
 
 #define POSITIVE_SPAN 10
 #define NEGATIVE_SPAN 25
@@ -67,6 +81,12 @@
 #define MIN_CAL -1000 // 0.1 s/d
 #define MAX_CAL 1000 // 0.1 s/d
 #define AUDIO_DEVICE_DEFAULT -1
+
+/* Time-window averaging for the displayed statistics (seconds). */
+#define AVG_WINDOW_MIN 10
+#define AVG_WINDOW_MAX 600
+#define AVG_WINDOW_STEP 10
+#define AVG_WINDOW_DEFAULT 60
 
 #define PRESET_BPH { 12000, 14400, 17280, 18000, 19800, 21600, 25200, 28800, 36000, 43200, 72000, 0 };
 
@@ -91,6 +111,7 @@ struct processing_buffers {
 	int waveform_max_i;
 	int tic,toc;
 	int ready;
+	enum amp_fail_reason amp_fail_reason;
 	uint64_t timestamp, last_tic, last_toc, events_from;
 	uint64_t *events;
 	unsigned char *events_tictoc;
@@ -173,12 +194,24 @@ struct snapshot {
 	int cal_percent;
 	int cal_result; // 0.1 s/d
 
+	/** Length of the time window used for averaging, in seconds. */
+	int avg_window;
+
+	// Ring buffers for windowed statistics (per-beat history)
+	double *rate_hist;
+	double *be_hist;
+	double *amp_hist;
+	int hist_wp;
+	int hist_count;
+	int hist_max;
+
 	// data dependent on bph, la, cal
 	double sample_rate;
 	int guessed_bph;
 	double rate;
 	double be;
 	double amp;
+	enum amp_fail_reason amp_fail_reason;
 
 	double trace_centering;
 	double trace_zoom;
@@ -218,6 +251,7 @@ struct output_panel {
 	GtkWidget *panel;
 
 	GtkWidget *output_drawing_area;
+	GtkWidget *stats_drawing_area;
 	GtkWidget *tic_drawing_area;
 	GtkWidget *toc_drawing_area;
 	GtkWidget *period_drawing_area;
@@ -236,6 +270,7 @@ void redraw_op(struct output_panel *op);
 void op_set_snapshot(struct output_panel *op, struct snapshot *snst);
 void op_set_border(struct output_panel *op, int i);
 void op_destroy(struct output_panel *op);
+void handle_copy_stats(struct output_panel *op);
 
 /* interface.c */
 struct main_window {
@@ -245,6 +280,7 @@ struct main_window {
 	GtkWidget *bph_combo_box;
 	GtkWidget *audio_combo_box;
 	GtkWidget *sample_rate_combo_box;
+	GtkWidget *avg_window_combo_box;
 	GtkWidget *la_spin_button;
 	GtkWidget *cal_spin_button;
 	GtkWidget *snapshot_button;
@@ -270,6 +306,7 @@ struct main_window {
 	double la; // deg
 	int cal; // 0.1 s/d
 	int nominal_sr;
+	int avg_window;
 	int restart_audio;
 
 	GKeyFile *config_file;
@@ -296,7 +333,8 @@ void error(char *format,...);
 	OP(calibration, cal, int) \
 	OP(light_algorithm, is_light, int) \
 	OP(audio_device, audio_device, int) \
-	OP(audio_rate, nominal_sr, int)
+	OP(audio_rate, nominal_sr, int) \
+	OP(avg_window, avg_window, int)
 
 struct conf_data {
 #define DEF(NAME,PLACE,TYPE) TYPE PLACE;

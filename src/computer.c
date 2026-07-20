@@ -68,6 +68,26 @@ struct snapshot *snapshot_clone(struct snapshot *s)
 		t->amps = NULL;
 		t->amps_time = NULL;
 	}
+
+	// Copy rate history
+	if (s->hist_count > 0) {
+		t->hist_count = s->hist_count;
+		t->hist_wp = s->hist_wp;
+		t->hist_max = s->hist_max;
+		t->rate_hist = malloc(t->hist_max * sizeof(double));
+		t->be_hist = malloc(t->hist_max * sizeof(double));
+		t->amp_hist = malloc(t->hist_max * sizeof(double));
+		memcpy(t->rate_hist, s->rate_hist, t->hist_max * sizeof(double));
+		memcpy(t->be_hist, s->be_hist, t->hist_max * sizeof(double));
+		memcpy(t->amp_hist, s->amp_hist, t->hist_max * sizeof(double));
+	} else {
+		t->hist_count = 0;
+		t->hist_wp = 0;
+		t->hist_max = 0;
+		t->rate_hist = NULL;
+		t->be_hist = NULL;
+		t->amp_hist = NULL;
+	}
 	return t;
 }
 
@@ -78,6 +98,9 @@ void snapshot_destroy(struct snapshot *s)
 	free(s->amps);
 	free(s->events_tictoc);
 	free(s->events);
+	free(s->rate_hist);
+	free(s->be_hist);
+	free(s->amp_hist);
 	free(s);
 }
 
@@ -184,6 +207,16 @@ void compute_results(struct snapshot *s)
 		s->amp = s->la * s->pb->amp; // 0 = not available
 		if(s->amp < 135 || s->amp > 360)
 			s->amp = 0;
+		s->amp_fail_reason = s->pb->amp_fail_reason;
+
+		// Push to history ring buffers
+		if(s->rate_hist && s->hist_max > 0) {
+			s->rate_hist[s->hist_wp] = s->rate;
+			s->be_hist[s->hist_wp] = s->be;
+			s->amp_hist[s->hist_wp] = s->amp;
+			s->hist_wp = (s->hist_wp + 1) % s->hist_max;
+			if(s->hist_count < s->hist_max) s->hist_count++;
+		}
 	} else
 		s->guessed_bph = s->bph ? s->bph : DEFAULT_BPH;
 }
@@ -227,6 +260,7 @@ static void *computing_thread(void *void_computer)
 			compute_update(c);
 			compute_events(c);
 		}
+		compute_results(c->actv);
 
 		pthread_mutex_lock(&c->mutex);
 			if(c->curr)
@@ -335,6 +369,7 @@ struct computer *start_computer(int nominal_sr, int bph, double la, int cal, int
 	s->cal_state = 0;
 	s->cal_percent = 0;
 	s->cal_result = 0;
+	s->avg_window = AVG_WINDOW_DEFAULT;
 	s->bph = bph;
 	s->la = la;
 	s->cal = cal;
@@ -344,6 +379,14 @@ struct computer *start_computer(int nominal_sr, int bph, double la, int cal, int
 	s->rate = 0;
 	s->be = 0;
 	s->amp = 0;
+
+	// History buffers for windowed stats
+	s->hist_max = 36000;  // max beats per hour at 36000 bph = 10/sec, 1hr = 36000
+	s->rate_hist = calloc(s->hist_max, sizeof(double));
+	s->be_hist = calloc(s->hist_max, sizeof(double));
+	s->amp_hist = calloc(s->hist_max, sizeof(double));
+	s->hist_wp = 0;
+	s->hist_count = 0;
 
 	c = malloc(sizeof(struct computer));
 	if(!c) goto error;

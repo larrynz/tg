@@ -379,6 +379,7 @@ static int serialize_snapshot(FILE *f, struct snapshot *s, char *name)
 	SERIALIZE(double,trace_centering);
 	SERIALIZE(double,trace_zoom);
 	SERIALIZE(int,is_light);
+	SERIALIZE(int,avg_window);
 	if(make_label(f, "amps")) return 1;
 	if(serialize_float_array(f, s->amps, s->amps_count)) return 1;
 	if(make_label(f, "amps_time")) return 1;
@@ -483,6 +484,8 @@ static int scan_snapshot(FILE *f, struct snapshot **s, char **name)
 		SCAN(double,trace_centering);
 		SCAN(double,trace_zoom);
 		SCAN(int,is_light);
+
+		SCAN(int,avg_window);
 
 		if(eat_object(f)) goto error;
 	}

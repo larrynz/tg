@@ -30,6 +30,8 @@ int testing = 0;
 int preset_bph[] = PRESET_BPH;
 static const int available_sample_rates[] = {22050, 32000, 44100, 48000, 96000, 0};
 static const char *available_sample_rate_labels[] = {"22.05 kHz", "32 kHz", "44.1 kHz", "48 kHz", "96 kHz", NULL};
+static const int avg_window_options[] = {10, 30, 60, 120, 300, 600, 0};
+static const char *avg_window_labels[] = {"10 s", "30 s", "60 s", "120 s", "300 s", "600 s", NULL};
 
 void print_debug(char *format,...)
 {
@@ -159,6 +161,23 @@ static void handle_sample_rate_change(GtkComboBox *b, struct main_window *w)
 	if(w->computer->recompute >= 0)
 		kill_computer(w);
 	unlock_computer(w->computer);
+}
+
+static void handle_avg_window_change(GtkComboBox *b, struct main_window *w)
+{
+	if(!w->controls_active) return;
+	const gchar *id = gtk_combo_box_get_active_id(b);
+	if(!id) return;
+
+	char *end = NULL;
+	long window = strtol(id, &end, 10);
+	if(!end || *end) return;
+	if(window < AVG_WINDOW_MIN) window = AVG_WINDOW_MIN;
+	if(window > AVG_WINDOW_MAX) window = AVG_WINDOW_MAX;
+	w->avg_window = (int)window;
+	w->active_snapshot->avg_window = (int)window;
+	save_on_change(w);
+	gtk_widget_queue_draw(w->notebook);
 }
 
 static gboolean output_cal(GtkSpinButton *spin, gpointer data)
@@ -352,6 +371,7 @@ static void controls_active(struct main_window *w, int active)
 	gtk_widget_set_sensitive(w->bph_combo_box, active);
 	gtk_widget_set_sensitive(w->audio_combo_box, active);
 	gtk_widget_set_sensitive(w->sample_rate_combo_box, active);
+	gtk_widget_set_sensitive(w->avg_window_combo_box, active);
 	gtk_widget_set_sensitive(w->la_spin_button, active);
 	gtk_widget_set_sensitive(w->cal_spin_button, active);
 	gtk_widget_set_sensitive(w->cal_button, active);
@@ -416,6 +436,13 @@ static void handle_tab_changed(GtkNotebook *nbk, GtkWidget *panel, guint x, stru
 
 	gtk_spin_button_set_value(GTK_SPIN_BUTTON(w->la_spin_button), la);
 	gtk_spin_button_set_value(GTK_SPIN_BUTTON(w->cal_spin_button), cal);
+	{
+		int aw = snap->avg_window > 0 ? snap->avg_window : w->avg_window;
+		w->avg_window = aw;
+		char id[32];
+		sprintf(id, "%d", aw);
+		gtk_combo_box_set_active_id(GTK_COMBO_BOX(w->avg_window_combo_box), id);
+	}
 	gtk_widget_set_sensitive(w->save_item, !snap->calibrate && snap->pb);
 }
 
@@ -817,10 +844,6 @@ static void init_main_window(struct main_window *w)
 	}
 	g_signal_connect (w->bph_combo_box, "changed", G_CALLBACK(handle_bph_change), w);
 
-	// Lift angle label
-	label = gtk_label_new("lift angle");
-	gtk_box_pack_start(GTK_BOX(hbox), label, FALSE, FALSE, 0);
-
 	// Audio input label
 	label = gtk_label_new("audio");
 	gtk_box_pack_start(GTK_BOX(hbox), label, FALSE, FALSE, 0);
@@ -886,7 +909,10 @@ static void init_main_window(struct main_window *w)
 	}
 	g_signal_connect(w->sample_rate_combo_box, "changed", G_CALLBACK(handle_sample_rate_change), w);
 
-	// Lift angle spin button
+	// Lift angle label + spin button (kept together so the label sits
+	// immediately to the left of its control)
+	label = gtk_label_new("lift angle");
+	gtk_box_pack_start(GTK_BOX(hbox), label, FALSE, FALSE, 0);
 	w->la_spin_button = gtk_spin_button_new_with_range(MIN_LA, MAX_LA, 1);
 	gtk_box_pack_start(GTK_BOX(hbox), w->la_spin_button, FALSE, FALSE, 0);
 	gtk_spin_button_set_value(GTK_SPIN_BUTTON(w->la_spin_button), w->la);
@@ -899,6 +925,24 @@ static void init_main_window(struct main_window *w)
 	// Calibration spin button
 	w->cal_spin_button = gtk_spin_button_new_with_range(MIN_CAL, MAX_CAL, 1);
 	gtk_box_pack_start(GTK_BOX(hbox), w->cal_spin_button, FALSE, FALSE, 0);
+
+	// Averaging window label + combo (moved after cal)
+	label = gtk_label_new("avg window");
+	gtk_box_pack_start(GTK_BOX(hbox), label, FALSE, FALSE, 0);
+	w->avg_window_combo_box = gtk_combo_box_text_new();
+	gtk_box_pack_start(GTK_BOX(hbox), w->avg_window_combo_box, FALSE, FALSE, 0);
+	for(i = 0; avg_window_options[i]; i++) {
+		char id[32];
+		sprintf(id, "%d", avg_window_options[i]);
+		gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(w->avg_window_combo_box), id, avg_window_labels[i]);
+	}
+	{
+		char id[32];
+		sprintf(id, "%d", w->avg_window);
+		if(!gtk_combo_box_set_active_id(GTK_COMBO_BOX(w->avg_window_combo_box), id))
+			gtk_combo_box_set_active(GTK_COMBO_BOX(w->avg_window_combo_box), 2);
+	}
+	g_signal_connect(w->avg_window_combo_box, "changed", G_CALLBACK(handle_avg_window_change), w);
 	gtk_spin_button_set_value(GTK_SPIN_BUTTON(w->cal_spin_button), w->cal);
 	gtk_spin_button_set_numeric(GTK_SPIN_BUTTON(w->cal_spin_button), FALSE);
 	gtk_entry_set_width_chars(GTK_ENTRY(w->cal_spin_button), 6);
@@ -915,6 +959,11 @@ static void init_main_window(struct main_window *w)
 	gtk_box_pack_start(GTK_BOX(hbox), w->snapshot_button, FALSE, FALSE, 0);
 	gtk_widget_set_sensitive(w->snapshot_button, FALSE);
 	g_signal_connect(w->snapshot_button, "clicked", G_CALLBACK(handle_snapshot), w);
+
+	// Copy stats button (moved next to Take Snapshot)
+	GtkWidget *copy_stats_btn = gtk_button_new_with_label("Copy Stats");
+	gtk_box_pack_start(GTK_BOX(hbox), copy_stats_btn, FALSE, FALSE, 4);
+	g_signal_connect(copy_stats_btn, "clicked", G_CALLBACK(handle_copy_stats), w->active_panel);
 
 	// Snapshot name field
 	GtkWidget *name_label = gtk_label_new("Current snapshot:");
@@ -1025,6 +1074,7 @@ guint refresh(struct main_window *w)
 		w->computer->curr = NULL;
 		s->trace_centering = trace_centering;
 		s->trace_zoom = trace_zoom > 0 ? trace_zoom : 1.0;
+		s->avg_window = w->avg_window;
 		if(w->computer->clear_trace && !s->calibrate) {
 			memset(s->events,0,s->events_count*sizeof(uint64_t));
 			memset(s->events_tictoc,0,s->events_count*sizeof(unsigned char));
@@ -1032,8 +1082,9 @@ guint refresh(struct main_window *w)
 			memset(s->amps_time,0,s->amps_count*sizeof(*s->amps_time));
 		}
 		if(s->calibrate && s->cal_state == 1 && s->cal_result != w->cal) {
-			w->cal = s->cal_result;
-			gtk_spin_button_set_value(GTK_SPIN_BUTTON(w->cal_spin_button), s->cal_result);
+			// Add calibration result to existing sample rate correction
+			w->cal += s->cal_result;
+			gtk_spin_button_set_value(GTK_SPIN_BUTTON(w->cal_spin_button), w->cal);
 		}
 	}
 	unlock_computer(w->computer);
@@ -1076,6 +1127,7 @@ static void start_interface(GApplication* app, void *p)
 	w->is_light = 0;
 	w->nominal_sr = PA_SAMPLE_RATE;
 	w->audio_device = AUDIO_DEVICE_DEFAULT;
+	w->avg_window = AVG_WINDOW_DEFAULT;
 	w->restart_audio = 0;
 
 	load_config(w);
@@ -1091,6 +1143,7 @@ static void start_interface(GApplication* app, void *p)
 
 	if(w->la < MIN_LA || w->la > MAX_LA) w->la = DEFAULT_LA;
 	if(w->bph < MIN_BPH || w->bph > MAX_BPH) w->bph = 0;
+	if(w->avg_window < AVG_WINDOW_MIN || w->avg_window > AVG_WINDOW_MAX) w->avg_window = AVG_WINDOW_DEFAULT;
 	if(w->cal < MIN_CAL || w->cal > MAX_CAL)
 		w->cal = (real_sr - w->nominal_sr) * (3600*24) / w->nominal_sr;
 

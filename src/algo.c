@@ -786,6 +786,7 @@ static void compute_amplitude(struct processing_buffers *p, double la)
 
 	p->amp = -1;
 	p->tic_pulse = p->toc_pulse = -1;
+	p->amp_fail_reason = AMP_OK;
 	while(threshold < .2 * glob_max) {
 		debug("amp threshold = %f%% glob max\n", threshold * 100 / glob_max);
 		double tic_pulse = -1;
@@ -824,10 +825,18 @@ static void compute_amplitude(struct processing_buffers *p, double la)
 			debug("amp = %f\n", la * p->amp);
 			break;
 		} else
-			debug("amp rejected\n");
+			if(!(135 < tic_amp && tic_amp < 360 && 135 < toc_amp && toc_amp < 360))
+					p->amp_fail_reason = AMP_TIC_TOC_OUT_OF_RANGE;
+					else
+					p->amp_fail_reason = AMP_TIC_TOC_DIFF_TOO_LARGE;
+					debug("amp rejected\n");
 next_threshold:	threshold *= 1.4;
 	}
-	if(p->amp < 0) debug("amp failed\n");
+	if(p->amp < 0) {
+		if(p->amp_fail_reason == AMP_OK)
+			p->amp_fail_reason = AMP_THRESHOLD_EXCEEDED;
+		debug("amp failed: %d\n", p->amp_fail_reason);
+		}
 }
 
 void setup_cal_data(struct calibration_data *cd)
