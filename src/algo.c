@@ -135,8 +135,11 @@ struct processing_buffers *pb_clone(struct processing_buffers *p)
 {
 	struct processing_buffers *new = malloc(sizeof(struct processing_buffers));
 	new->sample_count = ceil(p->period);
-	new->waveform = malloc(new->sample_count * sizeof(float));
-	memcpy(new->waveform, p->waveform, new->sample_count * sizeof(float));
+	if(new->sample_count > 0) {
+		new->waveform = malloc(new->sample_count * sizeof(float));
+		memcpy(new->waveform, p->waveform, new->sample_count * sizeof(float));
+	} else
+		new->waveform = NULL;
 	if(p->events) {
 		new->events = malloc(EVENTS_MAX * sizeof(uint64_t));
 		memcpy(new->events, p->events, EVENTS_MAX * sizeof(uint64_t));
@@ -168,6 +171,13 @@ struct processing_buffers *pb_clone(struct processing_buffers *p)
 	new->tic = p->tic;
 	new->toc = p->toc;
 	new->ready = p->ready;
+	new->amp_fail_reason = p->amp_fail_reason;
+	new->phase = p->phase;
+	new->waveform_max_i = p->waveform_max_i;
+	new->last_tic = p->last_tic;
+	new->last_toc = p->last_toc;
+	new->cal_phase = p->cal_phase;
+	new->events_from = p->events_from;
 	new->timestamp = p->timestamp;
 	return new;
 }
@@ -185,6 +195,11 @@ void pb_destroy_clone(struct processing_buffers *p)
 
 static float vmax(float *v, int a, int b, int *i_max)
 {
+	if(a < 0 || a >= b) {
+		debug("vmax: OOB guard triggered (a=%d, b=%d) -- upstream bug?\n", a, b);
+		if(i_max) *i_max = -1;
+		return -INFINITY;
+	}
 	float max = v[a];
 	if(i_max) *i_max = a;
 	int i;
@@ -352,10 +367,14 @@ static int peak_detector(float *buff, int a, int b)
 	if(max <= 0) return -1;
 
 	int i;
-	float v[b-a+1];
-	memcpy(v, buff + a, sizeof(v));
-	quickselect(v, b-a+1, (b-a+1)/2);
-	float med = v[(b-a+1)/2];
+	int vlen = b - a + 1;
+	if(vlen <= 0) return -1;  // Guard against negative/zero VLA size
+	float *v = malloc(vlen * sizeof(float));
+	if(!v) return -1;
+	memcpy(v, buff + a, vlen * sizeof(float));
+	quickselect(v, vlen, vlen/2);
+	float med = v[vlen/2];
+	free(v);
 
 	for(i=a+1; i<i_max; i++)
 		if(buff[i] <= med) break;
@@ -463,6 +482,8 @@ static int compute_period(struct processing_buffers *b, int bph)
 	if(count > 0) estimate = sum / count;
 	b->period = estimate;
 	if(count > 1)
+		/* Sample standard deviation (unbiased divisor count-1),
+		 * consistent with compute_window_stats (Issue 20 / L7). */
 		b->sigma = sqrt((sq_sum - count * estimate * estimate)/ (count-1));
 	else
 		b->sigma = b->period;
@@ -502,7 +523,11 @@ static float mean_less_greatest(const float *x, int n)
  */
 static float mean_less_two_greatest(const float *x, int n)
 {
-	float sum = x[0], greatest[2] = {x[0], FLT_MIN};
+	if(n < 3) {
+		debug("mean_less_two_greatest: n<3 guard triggered (n=%d) -- upstream bug?\n", n);
+		return 0;  // Guard against division by zero
+	}
+	float sum = x[0], greatest[2] = {x[0], -FLT_MAX};
 	int i;
 	for(i = 1; i < n; i++) {
 		sum += x[i];
@@ -565,7 +590,7 @@ static void compute_phase(struct processing_buffers *p, double period)
 			if(n >= p->sample_count) break;
 			p->waveform[i] += p->samples[n];
 		}
-		p->waveform[i] /= j;
+		if(j) p->waveform[i] /= j; else p->waveform[i] = 0;
 	}
 	for(i=0; i<period; i++) {
 		double a = i * 2 * M_PI / period;
@@ -624,6 +649,13 @@ static void prepare_waveform_cal(struct processing_buffers *p)
 static void smooth(float *in, float *out, int window, int size)
 {
 	int i;
+	if(window <= 0) {
+		/* Degenerate window: produce a flat zero output rather than
+		 * reading OOB / dividing by zero (Issue H3). */
+		for(i=0; i<size; i++) out[i] = 0;
+		return;
+	}
+	if(window > size) window = size;
 	double k = 1 - (1. / window);
 	double r_av = 0;
 	double u = 0;
@@ -660,13 +692,18 @@ static int compute_parameters(struct processing_buffers *p)
 	}
 
 	int wf_size = ceil(p->period);
-	float fold_wf[wf_size - tic_to_toc];
-	int i;
-	for(i = 0; i < wf_size - tic_to_toc; i++)
-		fold_wf[i] = p->waveform[i] + p->waveform[i+tic_to_toc];
+	int fold_size = wf_size - tic_to_toc;
 	int window = p->sample_rate / 2000;
-	float smooth_wf[wf_size - tic_to_toc - window];
-	smooth(fold_wf, smooth_wf, window, wf_size - tic_to_toc);
+	if(fold_size <= window) {
+		debug("tic_to_toc too large relative to period (fold_size=%d, window=%d)\n", fold_size, window);
+		return 1;
+	}
+	float fold_wf[fold_size];
+	int i;
+	for(i = 0; i < fold_size; i++)
+		fold_wf[i] = p->waveform[i] + p->waveform[i+tic_to_toc];
+	float smooth_wf[fold_size - window];
+	smooth(fold_wf, smooth_wf, window, fold_size);
 	int max_i;
 	float max = vmax(smooth_wf, 0, wf_size - tic_to_toc - window, &max_i);
 	if(max <= 0) return 1;
@@ -824,12 +861,14 @@ static void compute_amplitude(struct processing_buffers *p, double la)
 			debug("amp: be = %.1f\n",fabs(p->be)*1000/p->sample_rate);
 			debug("amp = %f\n", la * p->amp);
 			break;
-		} else
-			if(!(135 < tic_amp && tic_amp < 360 && 135 < toc_amp && toc_amp < 360))
-					p->amp_fail_reason = AMP_TIC_TOC_OUT_OF_RANGE;
-					else
-					p->amp_fail_reason = AMP_TIC_TOC_DIFF_TOO_LARGE;
-					debug("amp rejected\n");
+		} else {
+			if(!(135 < tic_amp && tic_amp < 360 && 135 < toc_amp && toc_amp < 360)) {
+				p->amp_fail_reason = AMP_TIC_TOC_OUT_OF_RANGE;
+			} else {
+				p->amp_fail_reason = AMP_TIC_TOC_DIFF_TOO_LARGE;
+			}
+			debug("amp rejected\n");
+		}
 next_threshold:	threshold *= 1.4;
 	}
 	if(p->amp < 0) {

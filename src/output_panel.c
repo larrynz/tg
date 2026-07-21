@@ -46,6 +46,11 @@ static void draw_graph(double a, double b, cairo_t *c, struct processing_buffers
 
 	int n;
 
+	if(!(p->period > 0) || !(p->waveform_max > 0)) {
+		/* M4: stale/invalid processing buffer -- nothing sensible to draw */
+		return;
+	}
+
 	int first = 1;
 	for(n=0; n<2*width; n++) {
 		int i = n < width ? n : 2*width - 1 - n;
@@ -108,7 +113,10 @@ static void draw_debug_graph(double a, double b, cairo_t *c, struct processing_b
 
 static double amplitude_to_time(double lift_angle, double amp)
 {
-	return asin(lift_angle / (2 * amp)) / M_PI;
+	double ratio = lift_angle / (2 * amp);
+	if(ratio > 1.0) ratio = 1.0;
+	if(ratio < -1.0) ratio = -1.0;
+	return asin(ratio) / M_PI;
 }
 
 static double draw_watch_icon(cairo_t *c, int signal, int happy, int light)
@@ -191,21 +199,20 @@ static double print_number(cairo_t *c, double x, double y, char *s)
 /** Aggregated statistics over a time window. */
 struct window_stats {
 	int nsamples;
+	int is_snapshot;  /**< C4: single-shot stats from a loaded file, not a live window */
 	double rate_mean, rate_min, rate_max, rate_std;
 	double be_mean, be_min, be_max, be_std;
 	double amp_mean, amp_min, amp_max, amp_std;
 };
 
 /** Compute windowed statistics for rate (s/d), beat error (ms) and
- *  amplitude (deg) from the snapshot event and amp rings.
+ *  amplitude (deg) from the snapshot's per-beat history ring buffers.
  *
- * For rate and beat error we walk the events ring backwards from
- * events_wp, accumulating consecutive (tic,toc) pairs whose
- * timestamps lie inside the window.
+ * Walks the ring buffers backwards from the most recent entry (hist_wp-1)
+ * and accumulates entries whose timestamp falls within [now - window, now],
+ * where now is the timestamp of the newest history entry.
  *
- * For amplitude we walk the amps ring inside the same window.
- *
- * @param s       snapshot with events/amps data
+ * @param s       snapshot with history ring data
  * @param window  time window in seconds
  * @param ws      caller-allocated struct to receive results  */
 static void compute_window_stats(
@@ -217,34 +224,54 @@ static void compute_window_stats(
 	ws->rate_min = ws->be_min = ws->amp_min = HUGE_VAL;
 	ws->rate_max = ws->be_max = ws->amp_max = -HUGE_VAL;
 
-	if(!s->rate_hist || s->hist_count == 0)
+	if(!s->rate_hist || s->hist_count == 0) {
+		/* C4: a loaded snapshot (rate_hist == NULL because the
+		 * history arrays were never serialised) has no windowed
+		 * history, but it does carry a perfectly good single-shot
+		 * rate/BE/amp. Surface them as single-sample stats so the
+		 * panel shows real numbers instead of "collecting data..."
+		 * forever. A live session keeps rate_hist non-NULL while it
+		 * is still gathering beats (hist_count == 0 there) and should
+		 * keep showing "collecting data..." until it has beats. */
+		if(!s->rate_hist && (s->rate || s->be || s->amp)) {
+			ws->nsamples = 1;
+			ws->is_snapshot = 1;
+			ws->rate_mean = ws->rate_min = ws->rate_max = s->rate;
+			ws->rate_std = 0;
+			ws->be_mean = ws->be_min = ws->be_max = s->be;
+			ws->be_std = 0;
+			ws->amp_mean = ws->amp_min = ws->amp_max = s->amp;
+			ws->amp_std = 0;
+		}
 		return;
+	}
 
-	// Calculate how many beats fit in the window
-	// For 36000 bph = 10 beats/sec, 60s window = 600 beats
-	double beats_per_sec = (s->bph > 0 ? (double)s->bph : (double)(s->guessed_bph ? s->guessed_bph : 43200)) / 7200.0;
-	int max_beats = (int)(window * beats_per_sec + 0.5);
-	int cnt = s->hist_count < max_beats ? s->hist_count : max_beats;
-	if(cnt == 0)
-		return;
-
-	// Start from the most recent entry
+	// Walk backwards from the most recent entry by timestamp
 	int i = s->hist_wp - 1;
 	if(i < 0) i = s->hist_max - 1;
+	uint64_t now = s->hist_time[i];
+	if(now == 0) return;  // No real timestamps yet (zero-initialized ring)
+	uint64_t window_frames = (uint64_t)(window * s->nominal_sr);
+	// Guard against underflow at startup when we have fewer frames than the window
+	uint64_t threshold = (now >= window_frames) ? (now - window_frames) : 0;
 
 	double sum = 0, sumsq = 0;
-	for(int j = 0; j < cnt; j++) {
+	int cnt = 0;
+	for(int j = 0; j < s->hist_count; j++) {
+		if(s->hist_time[i] < threshold)
+			break;
 		double r = s->rate_hist[i];
 		sum += r;
 		sumsq += r * r;
 		if(r < ws->rate_min) ws->rate_min = r;
 		if(r > ws->rate_max) ws->rate_max = r;
+		cnt++;
 		i--;
 		if(i < 0) i = s->hist_max - 1;
 	}
-	ws->rate_mean = sum / cnt;
+	ws->rate_mean = cnt > 0 ? sum / cnt : 0;
 	if(cnt > 1)
-		ws->rate_std = sqrt((sumsq - sum * sum / cnt) / cnt);
+		ws->rate_std = sqrt((sumsq - sum * sum / cnt) / (cnt - 1));
 	else
 		ws->rate_std = 0;
 	ws->nsamples = cnt;
@@ -261,9 +288,9 @@ static void compute_window_stats(
 		i--;
 		if(i < 0) i = s->hist_max - 1;
 	}
-	ws->be_mean = sum / cnt;
+	ws->be_mean = cnt > 0 ? sum / cnt : 0;
 	if(cnt > 1)
-		ws->be_std = sqrt((sumsq - sum * sum / cnt) / cnt);
+		ws->be_std = sqrt((sumsq - sum * sum / cnt) / (cnt - 1));
 	else
 		ws->be_std = 0;
 
@@ -279,9 +306,9 @@ static void compute_window_stats(
 		i--;
 		if(i < 0) i = s->hist_max - 1;
 	}
-	ws->amp_mean = sum / cnt;
+	ws->amp_mean = cnt > 0 ? sum / cnt : 0;
 	if(cnt > 1)
-		ws->amp_std = sqrt((sumsq - sum * sum / cnt) / cnt);
+		ws->amp_std = sqrt((sumsq - sum * sum / cnt) / (cnt - 1));
 	else
 		ws->amp_std = 0;
 }
@@ -310,11 +337,11 @@ static gboolean stats_draw_event(GtkWidget *widget, cairo_t *c, struct output_pa
 		/* Build clipboard text (same format as display) */
 		char clipbuf[512];
 		sprintf(clipbuf,
-			"Window: %ds, %d beats\n"
-			"Rate (s/d): mean=%+d min=%+d max=%+d std dev=%d\n"
-			"Beat Error (ms): mean=%.1f min=%.1f max=%.1f std dev=%.1f\n"
-			"Amplitude (deg): mean=%.1f min=%.1f max=%.1f std dev=%.1f",
-			aw, ws.nsamples,
+			"%s\n"
+			"Accuracy (secs/day): mean %+d min %+d max %+d std dev %d\n"
+			"Beat Error (ms): mean %.1f min %.1f max %.1f std dev %.1f\n"
+			"Amplitude (deg): mean %.1f min %.1f max %.1f std dev %.1f",
+		ws.is_snapshot ? "Loaded snapshot (single-shot)" : "Live window",
 			(int)round(ws.rate_mean), (int)round(ws.rate_min), (int)round(ws.rate_max), (int)round(ws.rate_std),
 			ws.be_mean, ws.be_min, ws.be_max, ws.be_std,
 			ws.amp_mean, ws.amp_min, ws.amp_max, ws.amp_std);
@@ -330,25 +357,23 @@ static gboolean stats_draw_event(GtkWidget *widget, cairo_t *c, struct output_pa
 		double col_std = 660;
 
 		/* ---- Line 1: Window info ---- */
-		cairo_set_font_size(c, OUTPUT_FONT * 0.4);
 		cairo_set_source(c, white);
 		char vbuf[64];
-		sprintf(vbuf, "Window: %ds, %d beats", aw, ws.nsamples);
+		sprintf(vbuf, ws.is_snapshot ? "Loaded snapshot (single-shot)" : "Window: %ds", aw);
 		print_s(c, col_label, y0 + extents.height, vbuf);
 
 		/* ---- Line 2: Rate ---- */
-		cairo_set_font_size(c, OUTPUT_FONT * 0.45);
 		cairo_set_source(c, green);
-		sprintf(vbuf, "Rate (s/d):");
+		sprintf(vbuf, "Accuracy (secs/day):");
 		print_s(c, col_label, y1 + extents.height, vbuf);
 		cairo_set_source(c, white);
-		sprintf(vbuf, "mean=%+d", (int)round(ws.rate_mean));
+		sprintf(vbuf, "mean %+d", (int)round(ws.rate_mean));
 		print_s(c, col_mean, y1 + extents.height, vbuf);
-		sprintf(vbuf, "min=%+d", (int)round(ws.rate_min));
+		sprintf(vbuf, "min %+d", (int)round(ws.rate_min));
 		print_s(c, col_min, y1 + extents.height, vbuf);
-		sprintf(vbuf, "max=%+d", (int)round(ws.rate_max));
+		sprintf(vbuf, "max %+d", (int)round(ws.rate_max));
 		print_s(c, col_max, y1 + extents.height, vbuf);
-		sprintf(vbuf, "std dev=%d", (int)round(ws.rate_std));
+		sprintf(vbuf, "std dev %d", (int)round(ws.rate_std));
 		print_s(c, col_std, y1 + extents.height, vbuf);
 
 		/* ---- Line 3: Beat Error ---- */
@@ -356,13 +381,13 @@ static gboolean stats_draw_event(GtkWidget *widget, cairo_t *c, struct output_pa
 		sprintf(vbuf, "Beat Error (ms):");
 		print_s(c, col_label, y2 + extents.height, vbuf);
 		cairo_set_source(c, white);
-		sprintf(vbuf, "mean=%.1f", ws.be_mean);
+		sprintf(vbuf, "mean %.1f", ws.be_mean);
 		print_s(c, col_mean, y2 + extents.height, vbuf);
-		sprintf(vbuf, "min=%.1f", ws.be_min);
+		sprintf(vbuf, "min %.1f", ws.be_min);
 		print_s(c, col_min, y2 + extents.height, vbuf);
-		sprintf(vbuf, "max=%.1f", ws.be_max);
+		sprintf(vbuf, "max %.1f", ws.be_max);
 		print_s(c, col_max, y2 + extents.height, vbuf);
-		sprintf(vbuf, "std dev=%.1f", ws.be_std);
+		sprintf(vbuf, "std dev %.1f", ws.be_std);
 		print_s(c, col_std, y2 + extents.height, vbuf);
 
 		/* ---- Line 4: Amplitude ---- */
@@ -370,21 +395,21 @@ static gboolean stats_draw_event(GtkWidget *widget, cairo_t *c, struct output_pa
 		sprintf(vbuf, "Amplitude (deg):");
 		print_s(c, col_label, y3 + extents.height, vbuf);
 		cairo_set_source(c, white);
-		sprintf(vbuf, "mean=%.1f", ws.amp_mean);
+		sprintf(vbuf, "mean %.1f", ws.amp_mean);
 		print_s(c, col_mean, y3 + extents.height, vbuf);
-		sprintf(vbuf, "min=%.1f", ws.amp_min);
+		sprintf(vbuf, "min %.1f", ws.amp_min);
 		print_s(c, col_min, y3 + extents.height, vbuf);
-		sprintf(vbuf, "max=%.1f", ws.amp_max);
+		sprintf(vbuf, "max %.1f", ws.amp_max);
 		print_s(c, col_max, y3 + extents.height, vbuf);
-		sprintf(vbuf, "std dev=%.1f", ws.amp_std);
+		sprintf(vbuf, "std dev %.1f", ws.amp_std);
 		print_s(c, col_std, y3 + extents.height, vbuf);
 	} else {
 		cairo_set_source(c, yellow);
 		cairo_set_font_size(c, OUTPUT_FONT * 0.45);
-		cairo_text_extents(c, "(collecting data...", &extents);
+		cairo_text_extents(c, "collecting data...", &extents);
 		double y = (OUTPUT_STATS_HEIGHT - extents.height) / 2 - extents.y_bearing;
 		cairo_move_to(c, 8, y);
-		cairo_show_text(c, "(collecting data...");
+		cairo_show_text(c, "collecting data...");
 	}
 
 	return FALSE;
@@ -403,6 +428,7 @@ void handle_copy_stats(struct output_panel *op)
 static gboolean output_query_tooltip(GtkWidget *widget, gint x, gint y, gboolean keyboard_mode, GtkTooltip *tooltip, struct output_panel *op)
 {
 	UNUSED(widget);
+	UNUSED(y);
 	UNUSED(keyboard_mode);
 	
 	struct snapshot *snst = op->snst;
@@ -545,11 +571,11 @@ static gboolean output_draw_event(GtkWidget *widget, cairo_t *c, struct output_p
 				break;
 		}
 	} else {
-		char outputs[8][32];
+		char outputs[8][64];
 		if(p) {
 			int rate = round(snst->rate);
 			double be = snst->be;
-			sprintf(outputs[0], "s/d %s%d    ", rate > 0 ? "+" : rate < 0 ? "-" : "", abs(rate));
+			sprintf(outputs[0], "Accuracy (secs/day) %s%d    ", rate > 0 ? "+" : rate < 0 ? "-" : "", abs(rate));
 			sprintf(outputs[1], "Beat Error (ms) %4.1f    ", be);
 			if(snst->amp > 0)
 				sprintf(outputs[2], "Amplitude (deg) %3.0f    ", snst->amp);
@@ -557,7 +583,7 @@ static gboolean output_draw_event(GtkWidget *widget, cairo_t *c, struct output_p
 				strcpy(outputs[2], "Amplitude (deg) ---    ");
 			sprintf(outputs[3], "bph %d    ", snst->guessed_bph);
 		} else {
-			strcpy(outputs[0], "s/d ---    ");
+			strcpy(outputs[0], "Accuracy (secs/day) ---    ");
 			strcpy(outputs[1], "Beat Error (ms) ---    ");
 			strcpy(outputs[2], "Amplitude (deg) ---    ");
 			strcpy(outputs[3], "bph ---    ");
@@ -760,23 +786,27 @@ static gboolean period_draw_event(GtkWidget *widget, cairo_t *c, struct output_p
 	double toc,a=0,b=0;
 
 	if(p) {
-		toc = p->tic < p->toc ? p->toc : p->toc + p->period;
-		a = ((double)p->tic + toc)/2 - p->period/2;
-		b = ((double)p->tic + toc)/2 + p->period/2;
+		if(!(p->period > 0)) {
+			/* M4: stale/invalid buffer (period <= 0) -- skip drawing */
+		} else {
+			toc = p->tic < p->toc ? p->toc : p->toc + p->period;
+			a = ((double)p->tic + toc)/2 - p->period/2;
+			b = ((double)p->tic + toc)/2 + p->period/2;
 
-		cairo_move_to(c, (p->tic - a - NEGATIVE_SPAN*.001*snst->sample_rate) * width/p->period, 0);
-		cairo_line_to(c, (p->tic - a - NEGATIVE_SPAN*.001*snst->sample_rate) * width/p->period, height);
-		cairo_line_to(c, (p->tic - a + POSITIVE_SPAN*.001*snst->sample_rate) * width/p->period, height);
-		cairo_line_to(c, (p->tic - a + POSITIVE_SPAN*.001*snst->sample_rate) * width/p->period, 0);
-		cairo_set_source(c,blueish);
-		cairo_fill(c);
+			cairo_move_to(c, (p->tic - a - NEGATIVE_SPAN*.001*snst->sample_rate) * width/p->period, 0);
+			cairo_line_to(c, (p->tic - a - NEGATIVE_SPAN*.001*snst->sample_rate) * width/p->period, height);
+			cairo_line_to(c, (p->tic - a + POSITIVE_SPAN*.001*snst->sample_rate) * width/p->period, height);
+			cairo_line_to(c, (p->tic - a + POSITIVE_SPAN*.001*snst->sample_rate) * width/p->period, 0);
+			cairo_set_source(c,blueish);
+			cairo_fill(c);
 
-		cairo_move_to(c, (toc - a - NEGATIVE_SPAN*.001*snst->sample_rate) * width/p->period, 0);
-		cairo_line_to(c, (toc - a - NEGATIVE_SPAN*.001*snst->sample_rate) * width/p->period, height);
-		cairo_line_to(c, (toc - a + POSITIVE_SPAN*.001*snst->sample_rate) * width/p->period, height);
-		cairo_line_to(c, (toc - a + POSITIVE_SPAN*.001*snst->sample_rate) * width/p->period, 0);
-		cairo_set_source(c,blueish);
-		cairo_fill(c);
+			cairo_move_to(c, (toc - a - NEGATIVE_SPAN*.001*snst->sample_rate) * width/p->period, 0);
+			cairo_line_to(c, (toc - a - NEGATIVE_SPAN*.001*snst->sample_rate) * width/p->period, height);
+			cairo_line_to(c, (toc - a + POSITIVE_SPAN*.001*snst->sample_rate) * width/p->period, height);
+			cairo_line_to(c, (toc - a + POSITIVE_SPAN*.001*snst->sample_rate) * width/p->period, 0);
+			cairo_set_source(c,blueish);
+			cairo_fill(c);
+		}
 	}
 
 	int i;

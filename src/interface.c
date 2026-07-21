@@ -1064,12 +1064,13 @@ guint save_on_change_timer(struct main_window *w)
 
 guint refresh(struct main_window *w)
 {
+	struct snapshot *old_snapshot = NULL;
 	lock_computer(w->computer);
 	struct snapshot *s = w->computer->curr;
 	if(s) {
 		double trace_centering = w->active_snapshot->trace_centering;
 		double trace_zoom = w->active_snapshot->trace_zoom;
-		snapshot_destroy(w->active_snapshot);
+		old_snapshot = w->active_snapshot;
 		w->active_snapshot = s;
 		w->computer->curr = NULL;
 		s->trace_centering = trace_centering;
@@ -1100,6 +1101,11 @@ guint refresh(struct main_window *w)
 		gtk_widget_queue_draw(w->notebook);
 	}
 	gtk_widget_set_sensitive(w->snapshot_button, photogenic);
+
+	// Destroy the old snapshot after all panels have been updated
+	if(old_snapshot)
+		snapshot_destroy(old_snapshot);
+
 	return FALSE;
 }
 
@@ -1140,6 +1146,11 @@ static void start_interface(GApplication* app, void *p)
 	}
 	w->audio_device = get_audio_input_device();
 	w->nominal_sr = get_audio_sample_rate();
+
+	if(fabs(real_sr - w->nominal_sr) > 1) {
+		debug("PortAudio sample rate mismatch: nominal=%d real=%.0f -- DSP may be slightly biased until calibration\n",
+			w->nominal_sr, real_sr);
+	}
 
 	if(w->la < MIN_LA || w->la > MAX_LA) w->la = DEFAULT_LA;
 	if(w->bph < MIN_BPH || w->bph > MAX_BPH) w->bph = 0;

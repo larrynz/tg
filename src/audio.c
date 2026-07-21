@@ -27,7 +27,10 @@ pthread_mutex_t audio_mutex;
 static PaDeviceIndex selected_input_device = paNoDevice;
 static int selected_sample_rate = PA_SAMPLE_RATE;
 
-/* Data for PA callback to use */
+/* Data for PA callback to use.
+ * Note: the 'info' pointer passed to the callback shadows this file-scope
+ * variable intentionally - the callback receives &info as its 'data' arg.
+ */
 static struct callback_info {
 	int 	channels;	//!< Number of channels
 	bool	light;		//!< Light algorithm in use, copy half data
@@ -158,7 +161,9 @@ int start_portaudio(int *nominal_sample_rate, double *real_sample_rate)
 		const PaDeviceInfo *failed_info = Pa_GetDeviceInfo(input_device);
 		PaHostApiIndex failed_host = failed_info ? failed_info->hostApi : -1;
 		const PaHostApiInfo *failed_api = (failed_host >= 0) ? Pa_GetHostApiInfo(failed_host) : NULL;
+#ifdef DEBUG
 		const char *failed_api_name = failed_api ? failed_api->name : "unknown";
+#endif
 
 		debug("Pa_OpenStream failed on host API '%s': %s\n", failed_api_name, Pa_GetErrorText(err));
 
@@ -378,7 +383,7 @@ int analyze_pa_data_cal(struct processing_data *pd, struct calibration_data *cd)
 
 	int i,j;
 	debug("\nSTART OF CALIBRATION CYCLE\n\n");
-	for(j=0; p[j].sample_count < 2*p[j].sample_rate; j++);
+	for(j=0; j < NSTEPS && p[j].sample_count < 2*p[j].sample_rate; j++);
 	for(i=0; i+j<NSTEPS-1; i++)
 		if(test_cal(&p[i+j]))
 			return i ? i+j : 0;

@@ -4,15 +4,16 @@ Tg is a desktop timegrapher for mechanical watches. It listens to the ticking so
 
 ## Download
 
-- Windows installer (.msi): https://github.com/agrigera/tg/releases/download/v0.8.0/tg-timer_0.8.0.msi
-- Latest release page (all assets): https://github.com/agrigera/tg/releases/latest
+- Linux Executable https://github.com/larrynz/tg/releases/download/0.8.1/tg-timer
+- Latest release page (all assets): https://github.com/larrynz/tg/tree/custom
 
 ## What You Need
 
 - a working microphone or audio input device
 - a quiet enough environment to capture the watch clearly
 - the correct BPH and lift angle if you want the most reliable readings
-- calibration, or at least a known-good setup, if you care about accuracy in seconds per day
+- calibration, or at least a known-good setup, use a loud quartz clock as a stable 1 Hz calibration signal.
+   I also have had success using https://truemetronome.app/online/ and setting to 60 BPM.
 
 If you want practical setup advice instead of just build instructions, start here:
 

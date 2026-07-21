@@ -21,6 +21,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
+#include <float.h>
 #include <stdbool.h>
 #include <complex.h>
 #include <fftw3.h>
@@ -71,7 +72,7 @@ enum amp_fail_reason {
 #define PAPERSTRIP_ZOOM_CAL 100
 #define PAPERSTRIP_MARGIN .2
 
-#define MIN_BPH 8100
+#define MIN_BPH 8100  // 2.25 Hz lower bound of autocorrelation search (atypical half-step watch rate)
 #define TYP_BPH 12000
 #define MAX_BPH 72000
 #define DEFAULT_BPH 21600
@@ -88,7 +89,7 @@ enum amp_fail_reason {
 #define AVG_WINDOW_STEP 10
 #define AVG_WINDOW_DEFAULT 60
 
-#define PRESET_BPH { 12000, 14400, 17280, 18000, 19800, 21600, 25200, 28800, 36000, 43200, 72000, 0 };
+#define PRESET_BPH { 12000, 14400, 17280, 18000, 19800, 21600, 25200, 28800, 36000, 43200, 72000, 0 }
 
 #ifdef DEBUG
 #define debug(...) print_debug(__VA_ARGS__)
@@ -115,7 +116,6 @@ struct processing_buffers {
 	uint64_t timestamp, last_tic, last_toc, events_from;
 	uint64_t *events;
 	unsigned char *events_tictoc;
-	float amp_history;
 #ifdef DEBUG
 	int debug_size;
 	float *debug;
@@ -197,10 +197,13 @@ struct snapshot {
 	/** Length of the time window used for averaging, in seconds. */
 	int avg_window;
 
-	// Ring buffers for windowed statistics (per-beat history)
+	// Ring buffers for windowed statistics (per-beat history),
+	// with timestamps so the time window is honoured regardless of
+	// the actual beat rate (Issue 1).
 	double *rate_hist;
 	double *be_hist;
 	double *amp_hist;
+	uint64_t *hist_time;
 	int hist_wp;
 	int hist_count;
 	int hist_max;

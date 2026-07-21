@@ -69,7 +69,7 @@ struct snapshot *snapshot_clone(struct snapshot *s)
 		t->amps_time = NULL;
 	}
 
-	// Copy rate history
+	// Copy rate history (with timestamps for time-windowing)
 	if (s->hist_count > 0) {
 		t->hist_count = s->hist_count;
 		t->hist_wp = s->hist_wp;
@@ -77,9 +77,11 @@ struct snapshot *snapshot_clone(struct snapshot *s)
 		t->rate_hist = malloc(t->hist_max * sizeof(double));
 		t->be_hist = malloc(t->hist_max * sizeof(double));
 		t->amp_hist = malloc(t->hist_max * sizeof(double));
+		t->hist_time = malloc(t->hist_max * sizeof(uint64_t));
 		memcpy(t->rate_hist, s->rate_hist, t->hist_max * sizeof(double));
 		memcpy(t->be_hist, s->be_hist, t->hist_max * sizeof(double));
 		memcpy(t->amp_hist, s->amp_hist, t->hist_max * sizeof(double));
+		memcpy(t->hist_time, s->hist_time, t->hist_max * sizeof(uint64_t));
 	} else {
 		t->hist_count = 0;
 		t->hist_wp = 0;
@@ -87,6 +89,7 @@ struct snapshot *snapshot_clone(struct snapshot *s)
 		t->rate_hist = NULL;
 		t->be_hist = NULL;
 		t->amp_hist = NULL;
+		t->hist_time = NULL;
 	}
 	return t;
 }
@@ -101,12 +104,16 @@ void snapshot_destroy(struct snapshot *s)
 	free(s->rate_hist);
 	free(s->be_hist);
 	free(s->amp_hist);
+	free(s->hist_time);
 	free(s);
 }
 
 static int guess_bph(double period)
 {
 	double bph = 7200 / period;
+	// Initial min = bph means the first preset (12000) will always
+	// produce a diff smaller than bph (since bph ≈ 3–120), so ret
+	// is set correctly on the first iteration.
 	double min = bph;
 	int i,ret;
 
@@ -146,7 +153,13 @@ static void compute_update(struct computer *c)
 		if(c->actv->pb) pb_destroy_clone(c->actv->pb);
 		c->actv->pb = pb_clone(&p[i]);
 		c->actv->is_old = 0;
-		c->actv->signal = i == NSTEPS-1 && p[i].amp < 0 ? signal-1 : signal;
+		/* signal is the count of passing stages. analyze_pa_data() returned
+		 * that count, but the walk-back may have skipped the last acceptable
+		 * step due to excessive sigma, so derive the reported count from the
+		 * selected step index i instead (stages 0..i passed => i+1 stages).
+		 * If the very last step was selected but had a negative amplitude,
+		 * discount one stage (amp indicates the acquisition was marginal). */
+		c->actv->signal = (i == NSTEPS-1 && p[i].amp < 0) ? i : i+1;
 	} else {
 		c->actv->is_old = 1;
 		c->actv->signal = -signal;
@@ -202,18 +215,29 @@ void compute_results(struct snapshot *s)
 	s->sample_rate = s->nominal_sr * (1 + (double) s->cal / (10 * 3600 * 24));
 	if(s->pb) {
 		s->guessed_bph = s->bph ? s->bph : guess_bph(s->pb->period / s->sample_rate);
+		/* Rate formula: nominal beat period = sample_rate / guessed_bph.
+		 * Actual period = pb->period / sample_rate (in seconds).
+		 * Rate in s/d = (actual/nominal - 1) * seconds_per_day.
+		 * 7200 is 2 * 3600 (beats/hour * seconds/hour) for dimensional
+		 * consistency with guessed_bph. */
 		s->rate = (7200/(s->guessed_bph * s->pb->period / s->sample_rate) - 1)*24*3600;
 		s->be = fabs(s->pb->be) * 1000 / s->sample_rate;
 		s->amp = s->la * s->pb->amp; // 0 = not available
-		if(s->amp < 135 || s->amp > 360)
-			s->amp = 0;
 		s->amp_fail_reason = s->pb->amp_fail_reason;
+		if(s->amp < 135 || s->amp > 360) {
+			s->amp = 0;
+			// If the algorithm reported OK but our clamp rejects the
+			// result, override the fail reason so the UI is consistent.
+			if (s->amp_fail_reason == AMP_OK)
+				s->amp_fail_reason = AMP_TIC_TOC_OUT_OF_RANGE;
+		}
 
-		// Push to history ring buffers
+		// Push to history ring buffers (with timestamp for time-windowing)
 		if(s->rate_hist && s->hist_max > 0) {
 			s->rate_hist[s->hist_wp] = s->rate;
 			s->be_hist[s->hist_wp] = s->be;
 			s->amp_hist[s->hist_wp] = s->amp;
+			s->hist_time[s->hist_wp] = s->pb->timestamp;
 			s->hist_wp = (s->hist_wp + 1) % s->hist_max;
 			if(s->hist_count < s->hist_max) s->hist_count++;
 		}
@@ -297,9 +321,9 @@ void computer_destroy(struct computer *c)
 	snapshot_destroy(c->actv);
 	if(c->curr)
 		snapshot_destroy(c->curr);
+	pthread_join(c->thread, NULL);
 	pthread_mutex_destroy(&c->mutex);
 	pthread_cond_destroy(&c->cond);
-	pthread_join(c->thread, NULL);
 	free(c);
 }
 
@@ -380,11 +404,15 @@ struct computer *start_computer(int nominal_sr, int bph, double la, int cal, int
 	s->be = 0;
 	s->amp = 0;
 
-	// History buffers for windowed stats
-	s->hist_max = 36000;  // max beats per hour at 36000 bph = 10/sec, 1hr = 36000
+	// History buffers for windowed stats (with timestamps)
+	// M1: size for MAX_BPH beats/hour so a 72000-bph watch holds a full
+	// hour (and a 36000-bph watch holds 2h). Was hardcoded to 36000,
+	// which would wrap a 72000-bph ring in just 30 min.
+	s->hist_max = MAX_BPH;  // one hour of history at max beat rate
 	s->rate_hist = calloc(s->hist_max, sizeof(double));
 	s->be_hist = calloc(s->hist_max, sizeof(double));
 	s->amp_hist = calloc(s->hist_max, sizeof(double));
+	s->hist_time = calloc(s->hist_max, sizeof(uint64_t));
 	s->hist_wp = 0;
 	s->hist_count = 0;
 
@@ -426,6 +454,10 @@ error:
 		free(s->amps);
 		free(s->events_tictoc);
 		free(s->events);
+		free(s->rate_hist);
+		free(s->be_hist);
+		free(s->amp_hist);
+		free(s->hist_time);
 		free(s);
 	}
 
