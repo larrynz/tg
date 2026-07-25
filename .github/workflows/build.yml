@@ -16,7 +16,6 @@ permissions:
   packages: write
 
 env:
-  # WiX Toolset settings
   WIX_VERSION: "3.14.1"
 
 jobs:
@@ -116,7 +115,7 @@ jobs:
           # Copy GTK/PortAudio/FFTW DLLs from MSYS2
           cp /mingw64/bin/*.dll msi/resources/ 2>/dev/null || true
           # Remove non-dependency DLLs to keep installer small
-          ls msi/resources/*.dll | xargs -I {} basename {} | grep -vE "(gtk|gdk|gobject|glib|gio|pango|cairo|atk|portaudio|fftw|intl|iconv|winpthread|gcc_s|stdc\+\+)" | xargs -I {} rm msi/resources/{} 2>/dev/null || true
+          ls msi/resources/*.dll 2>/dev/null | xargs -I {} basename {} | grep -vE "(gtk|gdk|gobject|glib|gio|pango|cairo|atk|portaudio|fftw|intl|iconv|winpthread|gcc_s|stdc\+\+)" | xargs -I {} rm msi/resources/{} 2>/dev/null || true
 
       - name: Generate WiX fragments
         shell: cmd
@@ -179,22 +178,19 @@ jobs:
           # Fix library paths
           install_name_tool -change /opt/homebrew/lib/libgtk-3.0.dylib @executable_path/../Resources/libgtk-3.0.dylib Tg.app/Contents/MacOS/Tg 2>/dev/null || true
           install_name_tool -change /opt/homebrew/lib/libgdk-3.0.dylib @executable_path/../Resources/libgdk-3.0.dylib Tg.app/Contents/MacOS/Tg 2>/dev/null || true
-          # Create Info.plist
-          cat > Tg.app/Contents/Info.plist << EOF
-  <?xml version="1.0" encoding="UTF-8"?>
-  <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-  <plist version="1.0">
-  <dict>
-      <key>CFBundleExecutable</key><string>Tg</string>
-      <key>CFBundleIdentifier</key><string>com.vacaboja.tg</string>
-      <key>CFBundleName</key><string>Tg</string>
-      <key>CFBundleVersion</key><string>${VERSION}</string>
-      <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-      <key>LSMinimumSystemVersion</key><string>10.13</string>
-      <key>NSHighResolutionCapable</key><true/>
-  </dict>
-  </plist>
-  EOF
+          # Create Info.plist using printf to avoid heredoc issues
+          printf '<?xml version="1.0" encoding="UTF-8"?>\n' > Tg.app/Contents/Info.plist
+          printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n' >> Tg.app/Contents/Info.plist
+          printf '<plist version="1.0">\n' >> Tg.app/Contents/Info.plist
+          printf '<dict>\n' >> Tg.app/Contents/Info.plist
+          printf '    <key>CFBundleExecutable</key><string>Tg</string>\n' >> Tg.app/Contents/Info.plist
+          printf '    <key>CFBundleIdentifier</key><string>com.vacaboja.tg</string>\n' >> Tg.app/Contents/Info.plist
+          printf '    <key>CFBundleName</key><string>Tg</string>\n' >> Tg.app/Contents/Info.plist
+          printf '    <key>CFBundleVersion</key><string>%s</string>\n' "${VERSION}" >> Tg.app/Contents/Info.plist
+          printf '    <key>CFBundleShortVersionString</key><string>%s</string>\n' "${VERSION}" >> Tg.app/Contents/Info.plist
+          printf '    <key>LSMinimumSystemVersion</key><string>10.13</string>\n' >> Tg.app/Contents/Info.plist
+          printf '    <key>NSHighResolutionCapable</key><true/>\n' >> Tg.app/Contents/Info.plist
+          printf '</dict>\n</plist>\n' >> Tg.app/Contents/Info.plist
 
       - name: Create .dmg
         run: |
