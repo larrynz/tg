@@ -4,7 +4,7 @@ Tg is a desktop timegrapher for mechanical watches. It listens to the ticking so
 
 ## Download
 
-- Linux Executable https://github.com/larrynz/tg/releases/download/0.8.1/tg-timer
+- Linux Executable https://github.com/larrynz/tg/releases/download/0.8.2/tg-timer
 - Latest release page (all assets): https://github.com/larrynz/tg/tree/custom
 
 ## What You Need
