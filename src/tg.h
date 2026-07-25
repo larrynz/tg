@@ -273,7 +273,8 @@ void redraw_op(struct output_panel *op);
 void op_set_snapshot(struct output_panel *op, struct snapshot *snst);
 void op_set_border(struct output_panel *op, int i);
 void op_destroy(struct output_panel *op);
-void handle_copy_stats(struct output_panel *op);
+void handle_copy_stats(GtkButton *b, struct output_panel *op);
+void handle_clear_stats(GtkButton *b, struct output_panel *op);
 
 /* interface.c */
 struct main_window {

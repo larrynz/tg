@@ -965,6 +965,11 @@ static void init_main_window(struct main_window *w)
 	gtk_box_pack_start(GTK_BOX(hbox), copy_stats_btn, FALSE, FALSE, 4);
 	g_signal_connect(copy_stats_btn, "clicked", G_CALLBACK(handle_copy_stats), w->active_panel);
 
+	// Clear button
+	GtkWidget *clear_btn = gtk_button_new_with_label("Clear");
+	gtk_box_pack_start(GTK_BOX(hbox), clear_btn, FALSE, FALSE, 4);
+	g_signal_connect(clear_btn, "clicked", G_CALLBACK(handle_clear_stats), w->active_panel);
+
 	// Snapshot name field
 	GtkWidget *name_label = gtk_label_new("Current snapshot:");
 	w->snapshot_name_entry = gtk_entry_new();

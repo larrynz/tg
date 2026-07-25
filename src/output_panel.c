@@ -17,6 +17,7 @@
 */
 
 #include "tg.h"
+#include <time.h>
 
 cairo_pattern_t *black,*white,*red,*green,*blue,*blueish,*yellow,*goldenrod;
 
@@ -135,10 +136,10 @@ static double draw_watch_icon(cairo_t *c, int signal, int happy, int light)
 	int i;
 	cairo_set_line_width(c,1);
 	for(i = 0; i < signal; i++) {
-		// Color gradient: green (stage 0) -> yellow (stage 2) -> red (stage 3+)
-		if (i == 0) cairo_set_source(c, green);
+		// Color gradient: red (stage 0, coarse) -> yellow (stage 1) -> green (stage 2+, fine)
+		if (i == 0) cairo_set_source(c, red);
 		else if (i == 1) cairo_set_source(c, yellow);
-		else cairo_set_source(c, red);
+		else cairo_set_source(c, green);
 		cairo_move_to(c, OUTPUT_WINDOW_HEIGHT + 0.5*l, OUTPUT_WINDOW_HEIGHT * 0.9 - 2*i*l);
 		cairo_line_to(c, OUTPUT_WINDOW_HEIGHT + 1.5*l, OUTPUT_WINDOW_HEIGHT * 0.9 - 2*i*l);
 		cairo_line_to(c, OUTPUT_WINDOW_HEIGHT + 1.5*l, OUTPUT_WINDOW_HEIGHT * 0.9 - (2*i+1)*l);
@@ -415,8 +416,9 @@ static gboolean stats_draw_event(GtkWidget *widget, cairo_t *c, struct output_pa
 	return FALSE;
 }
 
-void handle_copy_stats(struct output_panel *op)
+void handle_copy_stats(GtkButton *b, struct output_panel *op)
 {
+	UNUSED(b);
 	GtkWidget *widget = op->stats_drawing_area;
 	gchar *text = g_object_get_data(G_OBJECT(widget), "stats-text");
 	if (text) {
@@ -1082,6 +1084,24 @@ static void handle_clear_trace(GtkButton *b, struct output_panel *op)
 	}
 }
 
+void handle_clear_stats(GtkButton *b, struct output_panel *op)
+{
+	UNUSED(b);
+	if(op->computer) {
+		lock_computer(op->computer);
+		if(!op->snst->calibrate) {
+			memset(op->snst->events,0,op->snst->events_count*sizeof(uint64_t));
+			memset(op->snst->events_tictoc,0,op->snst->events_count*sizeof(unsigned char));
+			memset(op->snst->amps,0,op->snst->amps_count*sizeof(*op->snst->amps));
+			memset(op->snst->amps_time,0,op->snst->amps_count*sizeof(*op->snst->amps_time));
+			op->snst->trace_zoom = 1.0;
+			op->computer->clear_trace = 1;
+		}
+		unlock_computer(op->computer);
+		gtk_widget_queue_draw(op->paperstrip_drawing_area);
+	}
+}
+
 static void handle_center_trace(GtkButton *b, struct output_panel *op)
 {
 	UNUSED(b);
@@ -1218,6 +1238,98 @@ void op_destroy(struct output_panel *op)
 	free(op);
 }
 
+// Right-click context menu for Save As Image
+static void handle_save_as_image(GtkMenuItem *item, struct output_panel *op)
+{
+	UNUSED(item);
+	if (!op || !op->snst || !op->snst->pb)
+		return;
+
+	// Get the selected orientation from the menu item's data
+	const char *orientation = g_object_get_data(G_OBJECT(item), "orientation");
+	if (!orientation)
+		return;
+
+	// Generate filename: orientation + YYYYMMDD_HHMMSS
+	time_t now = time(NULL);
+	struct tm *tm_info = localtime(&now);
+	char timestamp[32];
+	strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_info);
+
+	char filename[512];
+	snprintf(filename, sizeof(filename), "%s_%s.png", orientation, timestamp);
+
+	// Create a file chooser dialog
+	GtkWidget *dialog = gtk_file_chooser_dialog_new("Save Snapshot As",
+		GTK_WINDOW(gtk_widget_get_toplevel(op->panel)),
+		GTK_FILE_CHOOSER_ACTION_SAVE,
+		"_Cancel", GTK_RESPONSE_CANCEL,
+		"_Save", GTK_RESPONSE_ACCEPT,
+		NULL);
+
+	gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dialog), filename);
+	gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dialog), TRUE);
+
+	GtkFileFilter *png_filter = gtk_file_filter_new();
+	gtk_file_filter_set_name(png_filter, "PNG Image");
+	gtk_file_filter_add_pattern(png_filter, "*.png");
+	gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), png_filter);
+
+	if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+		char *chosen_filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+		if (chosen_filename) {
+			// Capture the FULL toplevel window (includes tabs, menus, all panels)
+			GtkWidget *toplevel = gtk_widget_get_toplevel(op->panel);
+			GdkWindow *window = gtk_widget_get_window(toplevel);
+			if (window) {
+				int x, y, width, height;
+				gdk_window_get_geometry(window, &x, &y, &width, &height);
+				
+				cairo_surface_t *surface = gdk_window_create_similar_surface(window,
+					CAIRO_CONTENT_COLOR, width, height);
+				cairo_t *cr = cairo_create(surface);
+				
+				// Render the entire window
+				gdk_cairo_set_source_window(cr, window, 0, 0);
+				cairo_paint(cr);
+				
+				cairo_surface_write_to_png(surface, chosen_filename);
+				
+				cairo_destroy(cr);
+				cairo_surface_destroy(surface);
+			}
+			
+			g_free(chosen_filename);
+		}
+	}
+	gtk_widget_destroy(dialog);
+}
+
+static gboolean handle_panel_button_press(GtkWidget *widget, GdkEventButton *event, struct output_panel *op)
+{
+	UNUSED(widget);
+	if (event->type == GDK_BUTTON_PRESS && event->button == 3) { // Right click
+		GtkWidget *menu = gtk_menu_new();
+
+		const char *orientations[] = {
+			"Dial Up", "Dial Down", "12PM Down", 
+			"3PM Down", "6PM Down", "9PM Down"
+		};
+
+		for (int i = 0; i < 6; i++) {
+			GtkWidget *item = gtk_menu_item_new_with_label(orientations[i]);
+			g_object_set_data_full(G_OBJECT(item), "orientation", g_strdup(orientations[i]), g_free);
+			g_signal_connect(item, "activate", G_CALLBACK(handle_save_as_image), op);
+			gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+		}
+
+		gtk_widget_show_all(menu);
+		gtk_menu_popup_at_pointer(GTK_MENU(menu), (GdkEvent *)event);
+		return TRUE;
+	}
+	return FALSE;
+}
+
 struct output_panel *init_output_panel(struct computer *comp, struct snapshot *snst, int border)
 {
 	struct output_panel *op = malloc(sizeof(struct output_panel));
@@ -1233,7 +1345,8 @@ struct output_panel *init_output_panel(struct computer *comp, struct snapshot *s
 	gtk_widget_set_size_request(op->output_drawing_area, 0, OUTPUT_WINDOW_HEIGHT);
 	gtk_box_pack_start(GTK_BOX(op->panel),op->output_drawing_area, FALSE, TRUE, 0);
 	g_signal_connect (op->output_drawing_area, "draw", G_CALLBACK(output_draw_event), op);
-	gtk_widget_set_events(op->output_drawing_area, GDK_EXPOSURE_MASK | GDK_POINTER_MOTION_MASK | GDK_LEAVE_NOTIFY_MASK);
+	gtk_widget_set_events(op->output_drawing_area, GDK_EXPOSURE_MASK | GDK_POINTER_MOTION_MASK | GDK_LEAVE_NOTIFY_MASK | GDK_BUTTON_PRESS_MASK);
+	gtk_widget_add_events(op->output_drawing_area, GDK_BUTTON_PRESS_MASK);
 	g_signal_connect(op->output_drawing_area, "query-tooltip", G_CALLBACK(output_query_tooltip), op);
 	gtk_widget_set_has_tooltip(op->output_drawing_area, TRUE);
 
@@ -1243,6 +1356,8 @@ struct output_panel *init_output_panel(struct computer *comp, struct snapshot *s
 	gtk_box_pack_start(GTK_BOX(op->panel), op->stats_drawing_area, FALSE, TRUE, 0);
 	g_signal_connect(op->stats_drawing_area, "draw", G_CALLBACK(stats_draw_event), op);
 	gtk_widget_set_events(op->stats_drawing_area, GDK_EXPOSURE_MASK);
+	gtk_widget_add_events(op->stats_drawing_area, GDK_BUTTON_PRESS_MASK);
+	g_signal_connect(op->stats_drawing_area, "button-press-event", G_CALLBACK(handle_panel_button_press), op);
 
 	GtkWidget *hbox2 = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
 	gtk_box_pack_start(GTK_BOX(op->panel), hbox2, TRUE, TRUE, 0);
@@ -1259,6 +1374,8 @@ struct output_panel *init_output_panel(struct computer *comp, struct snapshot *s
 	gtk_box_pack_start(GTK_BOX(vbox2), op->paperstrip_drawing_area, TRUE, TRUE, 0);
 	g_signal_connect (op->paperstrip_drawing_area, "draw", G_CALLBACK(paperstrip_draw_event), op);
 	gtk_widget_set_events(op->paperstrip_drawing_area, GDK_EXPOSURE_MASK);
+	gtk_widget_add_events(op->paperstrip_drawing_area, GDK_BUTTON_PRESS_MASK);
+	g_signal_connect(op->paperstrip_drawing_area, "button-press-event", G_CALLBACK(handle_panel_button_press), op);
 
 	GtkWidget *hbox3 = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
 	gtk_box_pack_start(GTK_BOX(vbox2), hbox3, FALSE, TRUE, 0);
@@ -1309,6 +1426,8 @@ struct output_panel *init_output_panel(struct computer *comp, struct snapshot *s
 	gtk_box_pack_start(GTK_BOX(vbox3), op->tic_drawing_area, TRUE, TRUE, 0);
 	g_signal_connect (op->tic_drawing_area, "draw", G_CALLBACK(tic_draw_event), op);
 	gtk_widget_set_events(op->tic_drawing_area, GDK_EXPOSURE_MASK);
+	gtk_widget_add_events(op->tic_drawing_area, GDK_BUTTON_PRESS_MASK);
+	g_signal_connect(op->tic_drawing_area, "button-press-event", G_CALLBACK(handle_panel_button_press), op);
 
 	// Toc waveform area
 	GtkWidget *toc_title = gtk_label_new(NULL);
@@ -1318,6 +1437,8 @@ struct output_panel *init_output_panel(struct computer *comp, struct snapshot *s
 	gtk_box_pack_start(GTK_BOX(vbox3), op->toc_drawing_area, TRUE, TRUE, 0);
 	g_signal_connect (op->toc_drawing_area, "draw", G_CALLBACK(toc_draw_event), op);
 	gtk_widget_set_events(op->toc_drawing_area, GDK_EXPOSURE_MASK);
+	gtk_widget_add_events(op->toc_drawing_area, GDK_BUTTON_PRESS_MASK);
+	g_signal_connect(op->toc_drawing_area, "button-press-event", G_CALLBACK(handle_panel_button_press), op);
 
 	// Period waveform area
 	GtkWidget *period_title = gtk_label_new(NULL);
@@ -1327,13 +1448,20 @@ struct output_panel *init_output_panel(struct computer *comp, struct snapshot *s
 	gtk_box_pack_start(GTK_BOX(vbox3), op->period_drawing_area, TRUE, TRUE, 0);
 	g_signal_connect (op->period_drawing_area, "draw", G_CALLBACK(period_draw_event), op);
 	gtk_widget_set_events(op->period_drawing_area, GDK_EXPOSURE_MASK);
+	gtk_widget_add_events(op->period_drawing_area, GDK_BUTTON_PRESS_MASK);
+	g_signal_connect(op->period_drawing_area, "button-press-event", G_CALLBACK(handle_panel_button_press), op);
 
 #ifdef DEBUG
 	op->debug_drawing_area = gtk_drawing_area_new();
 	gtk_box_pack_start(GTK_BOX(vbox3), op->debug_drawing_area, TRUE, TRUE, 0);
 	g_signal_connect (op->debug_drawing_area, "draw", G_CALLBACK(debug_draw_event), op);
 	gtk_widget_set_events(op->debug_drawing_area, GDK_EXPOSURE_MASK);
+	gtk_widget_add_events(op->debug_drawing_area, GDK_BUTTON_PRESS_MASK);
+	g_signal_connect(op->debug_drawing_area, "button-press-event", G_CALLBACK(handle_panel_button_press), op);
 #endif
+
+	// Right-click context menu for Save As (on all drawing areas)
+	g_signal_connect(op->output_drawing_area, "button-press-event", G_CALLBACK(handle_panel_button_press), op);
 
 	return op;
 }
