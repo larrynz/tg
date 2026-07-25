@@ -1250,8 +1250,9 @@ static void handle_save_as_image(GtkMenuItem *item, struct output_panel *op)
 	if (!orientation)
 		return;
 
-	// Generate filename: orientation + YYYYMMDD_HHMMSS
-	time_t now = time(NULL);
+	// Generate filename: orientation + snapshot timestamp
+	uint64_t snap_ts = op->snst->timestamp;
+	time_t now = (time_t)(snap_ts / 1000000);  // timestamp is in microseconds
 	struct tm *tm_info = localtime(&now);
 	char timestamp[32];
 	strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_info);

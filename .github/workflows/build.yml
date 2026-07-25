@@ -1,0 +1,236 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v0.8.3)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  # WiX Toolset settings
+  WIX_VERSION: "3.14.1"
+
+jobs:
+  build-linux:
+    name: Build Linux (.deb)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [[ "${{ github.event.inputs.version }}" != "" ]]; then
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential autoconf automake libtool \
+            libgtk-3-dev portaudio19-dev libfftw3-dev \
+            debhelper devscripts
+
+      - name: Configure and build
+        run: |
+          ./autogen.sh
+          ./configure
+          make -j$(nproc)
+
+      - name: Build .deb package
+        run: |
+          cd packaging
+          ./make_deb.sh
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tg-timer-linux
+          path: packaging/deb/*.deb
+          retention-days: 30
+
+  build-windows:
+    name: Build Windows (.msi)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if ("${{ github.event.inputs.version }}" -ne "") {
+            $env:VERSION = "${{ github.event.inputs.version }}"
+          } else {
+            $env:VERSION = "${GITHUB_REF_NAME}".TrimStart('v')
+          }
+          echo "VERSION=$env:VERSION" >> $env:GITHUB_OUTPUT
+
+      - name: Install MSYS2 and dependencies
+        uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          install: >
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-gtk3
+            mingw-w64-x86_64-portaudio
+            mingw-w64-x86_64-fftw
+            mingw-w64-x86_64-autotools
+            make
+
+      - name: Install WiX Toolset
+        run: |
+          choco install wixtoolset --version ${{ env.WIX_VERSION }} -y
+          echo "C:\Program Files (x86)\WiX Toolset v${{ env.WIX_VERSION }}\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Configure and build
+        shell: msys2 {0}
+        run: |
+          ./autogen.sh
+          ./configure --host=x86_64-w64-mingw32 --prefix=/mingw64
+          make -j$(nproc)
+
+      - name: Prepare WiX resources
+        shell: msys2 {0}
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          mkdir -p msi/resources
+          cp tg-timer.exe msi/tg.exe
+          cp packaging/LICENSE.rtf msi/
+          cp README.md msi/
+          cp LICENSE msi/
+          cp icons/tg-document.ico msi/
+          # Copy GTK/PortAudio/FFTW DLLs from MSYS2
+          cp /mingw64/bin/*.dll msi/resources/ 2>/dev/null || true
+          # Remove non-dependency DLLs to keep installer small
+          ls msi/resources/*.dll | xargs -I {} basename {} | grep -vE "(gtk|gdk|gobject|glib|gio|pango|cairo|atk|portaudio|fftw|intl|iconv|winpthread|gcc_s|stdc\+\+)" | xargs -I {} rm msi/resources/{} 2>/dev/null || true
+
+      - name: Generate WiX fragments
+        shell: cmd
+        run: |
+          cd msi
+          heat dir resources -srd -gg -sreg -dr INSTALLDIR -cg Resources -out Resources.wxs
+
+      - name: Update WiX version and build MSI
+        shell: cmd
+        run: |
+          cd msi
+          powershell -Command "(Get-Content tg-timer.wxs) -replace 'Version=\".*?\"', 'Version=\"${{ steps.version.outputs.VERSION }}\"' | Set-Content tg-timer.wxs"
+          candle tg-timer.wxs Resources.wxs
+          light -out tg-timer_${{ steps.version.outputs.VERSION }}.msi -ext WixUIExtension tg-timer.wixobj Resources.wixobj
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tg-timer-windows
+          path: msi/tg-timer_*.msi
+          retention-days: 30
+
+  build-macos:
+    name: Build macOS (.dmg)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [[ "${{ github.event.inputs.version }}" != "" ]]; then
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install dependencies
+        run: |
+          brew install gtk+3 portaudio fftw autoconf automake libtool pkg-config
+
+      - name: Configure and build
+        run: |
+          ./autogen.sh
+          ./configure
+          make -j$(sysctl -n hw.ncpu)
+
+      - name: Create macOS app bundle
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          mkdir -p Tg.app/Contents/MacOS
+          mkdir -p Tg.app/Contents/Resources
+          cp tg-timer Tg.app/Contents/MacOS/Tg
+          # Copy required dylibs
+          cp /opt/homebrew/lib/libgtk-3*.dylib Tg.app/Contents/Resources/ 2>/dev/null || \
+          cp /usr/local/lib/libgtk-3*.dylib Tg.app/Contents/Resources/ 2>/dev/null || true
+          cp /opt/homebrew/lib/libgdk-3*.dylib Tg.app/Contents/Resources/ 2>/dev/null || \
+          cp /usr/local/lib/libgdk-3*.dylib Tg.app/Contents/Resources/ 2>/dev/null || true
+          # Fix library paths
+          install_name_tool -change /opt/homebrew/lib/libgtk-3.0.dylib @executable_path/../Resources/libgtk-3.0.dylib Tg.app/Contents/MacOS/Tg 2>/dev/null || true
+          install_name_tool -change /opt/homebrew/lib/libgdk-3.0.dylib @executable_path/../Resources/libgdk-3.0.dylib Tg.app/Contents/MacOS/Tg 2>/dev/null || true
+          # Create Info.plist
+          cat > Tg.app/Contents/Info.plist << EOF
+  <?xml version="1.0" encoding="UTF-8"?>
+  <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+  <plist version="1.0">
+  <dict>
+      <key>CFBundleExecutable</key><string>Tg</string>
+      <key>CFBundleIdentifier</key><string>com.vacaboja.tg</string>
+      <key>CFBundleName</key><string>Tg</string>
+      <key>CFBundleVersion</key><string>${VERSION}</string>
+      <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+      <key>LSMinimumSystemVersion</key><string>10.13</string>
+      <key>NSHighResolutionCapable</key><true/>
+  </dict>
+  </plist>
+  EOF
+
+      - name: Create .dmg
+        run: |
+          hdiutil create -volname "Tg ${{ steps.version.outputs.VERSION }}" \
+            -srcfolder Tg.app \
+            -ov -format UDZO \
+            "tg-timer-${{ steps.version.outputs.VERSION }}-macos.dmg"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tg-timer-macos
+          path: tg-timer-*-macos.dmg
+          retention-days: 30
+
+  release:
+    name: Create GitHub Release
+    needs: [build-linux, build-windows, build-macos]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: tg-timer-*
+          merge-multiple: true
+
+      - name: List artifacts
+        run: find artifacts -type f
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          tag_name: ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
