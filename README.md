@@ -4,15 +4,14 @@ Tg is a desktop timegrapher for mechanical watches. It listens to the ticking so
 
 ## Download
 
-- Linux Executable https://github.com/larrynz/tg/releases/download/0.8.2/tg-timer
-- Latest release page (all assets): https://github.com/larrynz/tg/tree/custom
+- Windows, Linux MacOS installers available https://github.com/larrynz/tg/releases
 
 ## What You Need
 
 - a working microphone or audio input device
 - a quiet enough environment to capture the watch clearly
 - the correct BPH and lift angle if you want the most reliable readings
-- calibration, or at least a known-good setup, use a loud quartz clock as a stable 1 Hz calibration signal.
+- calibration, or at least a known-good setup. Use a loud quartz clock as a stable 1 Hz calibration signal.
    I also have had success using https://truemetronome.app/online/ and setting to 60 BPM.
 
 If you want practical setup advice instead of just build instructions, start here:
@@ -21,17 +20,11 @@ If you want practical setup advice instead of just build instructions, start her
 - [docs/microphone-and-calibration-guide.md](docs/microphone-and-calibration-guide.md)
 - [docs/windows-vscode-development.md](docs/windows-vscode-development.md)
 
-Recent builds include top bar `audio` and `rate` controls (input device and sample rate). See the microphone guide for practical usage and troubleshooting.
-
 ## Supported Platforms
-
-The project documentation and packaging history indicate support for:
 
 - Windows
 - macOS
 - Linux
-
-The codebase is a native GTK application and should also be portable to other Unix-like systems with the required dependencies.
 
 ## Dependencies
 
@@ -58,7 +51,7 @@ Build tooling depends on:
 Generic release build:
 
 ```sh
-git clone https://github.com/agrigera/tg.git
+git clone https://github.com/larrynz/tg.git
 cd tg
 ./autogen.sh
 ./configure
@@ -91,7 +84,7 @@ Then build with the generic steps above.
 
 ```sh
 sudo apt-get install libgtk-3-dev libjack-jackd2-dev portaudio19-dev libfftw3-dev git autoconf automake libtool
-git clone https://github.com/agrigera/tg.git
+git clone https://github.com/larrynz/tg.git
 cd tg
 ./autogen.sh
 ./configure
@@ -104,7 +97,7 @@ make
 
 ```sh
 sudo dnf install fftw-devel portaudio-devel gtk3-devel autoconf automake libtool
-git clone https://github.com/agrigera/tg.git
+git clone https://github.com/larrynz/tg.git
 cd tg
 ./autogen.sh
 ./configure
@@ -113,8 +106,7 @@ make
 
 ### macOS
 
-This repository does not currently provide a verified, maintained macOS installation path in-tree.
-
+macOS installer provided but untested (I don't have a mac). 
 If you work on macOS, expect to verify your GTK, PortAudio, and microphone permission setup manually.
 
 ## Before You Trust The Numbers
@@ -130,9 +122,7 @@ Check these first:
 
 ## Project Status
 
-The software is useful and still worth maintaining, but the repository has some stale metadata and documentation that are being cleaned up.
-
-Known maintenance realities today:
+Known maintenance realities today (according to https://github.com/agrigera/tg):
 
 - external discussions about Tg are generally positive about the tool itself
 - users repeatedly ask for better microphone and calibration guidance
