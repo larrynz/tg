@@ -128,14 +128,14 @@ jobs:
         shell: cmd
         run: |
           cd msi
-          heat dir resources -srd -gg -sreg -dr INSTALLDIR -cg Resources -out Resources.wxs
+          heat dir resources -srd -gg -sreg -dr INSTALLDIR -cg Resources -out Resources.wxs -var var.ResourcesDir
 
       - name: Update WiX version and build MSI
         shell: cmd
         run: |
           cd msi
           powershell -Command "(Get-Content tg-timer.wxs) -replace 'Version=\".*?\"', 'Version=\"${{ steps.version.outputs.VERSION }}\"' | Set-Content tg-timer.wxs"
-          candle tg-timer.wxs Resources.wxs
+          candle -d ResourcesDir=resources tg-timer.wxs Resources.wxs
           light -out tg-timer_${{ steps.version.outputs.VERSION }}.msi -ext WixUIExtension tg-timer.wixobj Resources.wixobj
 
       - name: Upload Windows artifact
