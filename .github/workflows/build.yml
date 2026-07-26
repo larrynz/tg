@@ -117,6 +117,8 @@ jobs:
           cp README.md msi/
           cp LICENSE msi/
           cp icons/tg-document.ico msi/
+          # Copy WiX source file
+          cp packaging/tg-timer.wxs msi/
           # Copy GTK/PortAudio/FFTW DLLs from MSYS2
           cp /mingw64/bin/*.dll msi/resources/ 2>/dev/null || true
           # Remove non-dependency DLLs to keep installer small
