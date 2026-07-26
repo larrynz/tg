@@ -135,7 +135,7 @@ jobs:
         run: |
           cd msi
           powershell -Command "(Get-Content tg-timer.wxs) -replace 'Version=\".*?\"', 'Version=\"${{ steps.version.outputs.VERSION }}\"' | Set-Content tg-timer.wxs"
-          candle -d ResourcesDir=resources tg-timer.wxs Resources.wxs
+          candle -dResourcesDir=resources tg-timer.wxs Resources.wxs
           light -out tg-timer_${{ steps.version.outputs.VERSION }}.msi -ext WixUIExtension tg-timer.wixobj Resources.wixobj
 
       - name: Upload Windows artifact
