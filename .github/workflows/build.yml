@@ -59,12 +59,23 @@ jobs:
           VERSION="${{ steps.version.outputs.VERSION }}"
           sed -i "1s/0\.5\.2/$VERSION/" debian/changelog
           ./make_deb.sh
+          echo "=== DEB files location ==="
+          find . -name "*.deb" -type f
+          find / -name "tg-timer_${VERSION}*.deb" -type f 2>/dev/null || true
+
+      - name: Copy DEB artifacts
+        run: |
+          mkdir -p artifacts
+          find packaging -name "*.deb" -type f -exec cp {} artifacts/ \;
+          find / -name "tg-timer_${{ steps.version.outputs.VERSION }}*.deb" -type f -exec cp {} artifacts/ \; 2>/dev/null || true
+          ls -la artifacts/
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
           name: tg-timer-linux
-          path: packaging/deb/*.deb
+          path: artifacts/*.deb
+          if-no-files-found: error
 
   build-windows:
     name: Build Windows (.msi)
