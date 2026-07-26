@@ -59,7 +59,7 @@ jobs:
         with:
           name: tg-timer-linux
           path: packaging/deb/*.deb
-          retention-days: 30
+          
 
   build-windows:
     name: Build Windows (.msi)
@@ -136,7 +136,7 @@ jobs:
         with:
           name: tg-timer-windows
           path: msi/tg-timer_*.msi
-          retention-days: 30
+          
 
   build-macos:
     name: Build macOS (.dmg)
@@ -204,7 +204,7 @@ jobs:
         with:
           name: tg-timer-macos
           path: tg-timer-*-macos.dmg
-          retention-days: 30
+          
 
   release:
     name: Create GitHub Release
