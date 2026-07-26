@@ -55,6 +55,9 @@ jobs:
       - name: Build .deb package
         run: |
           cd packaging
+          # Update debian/changelog with correct version
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          sed -i "1s/0\.5\.2/$VERSION/" debian/changelog
           ./make_deb.sh
 
       - name: Upload Linux artifact
@@ -94,7 +97,7 @@ jobs:
 
       - name: Install WiX Toolset
         run: |
-          choco install wixtoolset --version ${{ env.WIX_VERSION }} -y
+          choco install wixtoolset --version ${{ env.WIX_VERSION }} -y --allow-downgrade || choco upgrade wixtoolset --version ${{ env.WIX_VERSION }} -y
           echo "C:\Program Files (x86)\WiX Toolset v${{ env.WIX_VERSION }}\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Configure and build
