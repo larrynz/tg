@@ -46,6 +46,11 @@ jobs:
             debhelper devscripts dh-autoreconf \
             git ca-certificates
 
+      - name: Set version from tag
+        run: |
+          echo "${{ steps.version.outputs.VERSION }}" > version
+          cat version
+
       - name: Configure and build
         run: |
           ./autogen.sh
@@ -110,6 +115,12 @@ jobs:
         run: |
           choco install wixtoolset --version ${{ env.WIX_VERSION }} -y --allow-downgrade || choco upgrade wixtoolset --version ${{ env.WIX_VERSION }} -y
           echo "C:\Program Files (x86)\WiX Toolset v${{ env.WIX_VERSION }}\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Set version from tag
+        shell: msys2 {0}
+        run: |
+          echo "${{ steps.version.outputs.VERSION }}" > version
+          cat version
 
       - name: Configure and build
         shell: msys2 {0}
@@ -176,6 +187,11 @@ jobs:
       - name: Install dependencies
         run: |
           brew install gtk+3 portaudio fftw autoconf automake libtool pkg-config
+
+      - name: Set version from tag
+        run: |
+          echo "${{ steps.version.outputs.VERSION }}" > version
+          cat version
 
       - name: Configure and build
         run: |
