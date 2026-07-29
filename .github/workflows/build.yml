@@ -230,6 +230,9 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -240,7 +243,32 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f
 
-      - name: Create Release
+      - name: Prepare release notes
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NOTES_FILE="docs/releases/v${VERSION}.md"
+          if [[ -f "$NOTES_FILE" ]]; then
+            echo "FOUND=true" >> $GITHUB_OUTPUT
+            # Write to a file to avoid escaping issues with env vars
+            cat "$NOTES_FILE" > /tmp/release-notes.md
+          else
+            echo "FOUND=false" >> $GITHUB_OUTPUT
+            echo "No release notes found at $NOTES_FILE — falling back to auto-generated notes"
+          fi
+
+      - name: Create Release (manual notes)
+        if: steps.notes.outputs.FOUND == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          body_path: /tmp/release-notes.md
+          tag_name: ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Release (auto notes fallback)
+        if: steps.notes.outputs.FOUND != 'true'
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*

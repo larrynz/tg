@@ -536,6 +536,7 @@ static void add_new_tab(struct snapshot *s, char *name, struct main_window *w)
 	gtk_notebook_set_show_border(GTK_NOTEBOOK(w->notebook), TRUE);
 	gtk_notebook_append_page(GTK_NOTEBOOK(w->notebook), op->panel, label);
 	gtk_notebook_set_tab_reorderable(GTK_NOTEBOOK(w->notebook), op->panel, TRUE);
+	gtk_notebook_set_current_page(GTK_NOTEBOOK(w->notebook), -1);
 	gtk_widget_set_sensitive(w->save_all_item, TRUE);
 	gtk_widget_set_sensitive(w->close_all_item, TRUE);
 }
@@ -927,7 +928,7 @@ static void init_main_window(struct main_window *w)
 	gtk_box_pack_start(GTK_BOX(hbox), w->cal_spin_button, FALSE, FALSE, 0);
 
 	// Averaging window label + combo (moved after cal)
-	label = gtk_label_new("avg window");
+	label = gtk_label_new("stats window");
 	gtk_box_pack_start(GTK_BOX(hbox), label, FALSE, FALSE, 0);
 	w->avg_window_combo_box = gtk_combo_box_text_new();
 	gtk_box_pack_start(GTK_BOX(hbox), w->avg_window_combo_box, FALSE, FALSE, 0);
@@ -978,6 +979,7 @@ static void init_main_window(struct main_window *w)
 	gtk_box_pack_start(GTK_BOX(w->snapshot_name), w->snapshot_name_entry, FALSE, FALSE, 0);
 	gtk_box_pack_start(GTK_BOX(hbox), w->snapshot_name, FALSE, FALSE, 0);
 	g_signal_connect(w->snapshot_name_entry, "changed", G_CALLBACK(handle_name_change), w);
+	g_object_set_data(G_OBJECT(w->window), "snapshot-name-entry", w->snapshot_name_entry);
 
 	empty = gtk_label_new("");
 	gtk_box_pack_start(GTK_BOX(hbox), empty, TRUE, FALSE, 0);

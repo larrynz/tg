@@ -60,8 +60,7 @@ enum amp_fail_reason {
 #define PA_BUFF_SIZE (PA_SAMPLE_RATE << (NSTEPS + FIRST_STEP))
 
 #define OUTPUT_FONT 40
-#define OUTPUT_WINDOW_HEIGHT 70
-#define OUTPUT_STATS_HEIGHT 120
+#define OUTPUT_WINDOW_HEIGHT 192
 
 #define POSITIVE_SPAN 10
 #define NEGATIVE_SPAN 25
@@ -254,7 +253,6 @@ struct output_panel {
 	GtkWidget *panel;
 
 	GtkWidget *output_drawing_area;
-	GtkWidget *stats_drawing_area;
 	GtkWidget *tic_drawing_area;
 	GtkWidget *toc_drawing_area;
 	GtkWidget *period_drawing_area;

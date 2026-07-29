@@ -314,112 +314,10 @@ static void compute_window_stats(
 		ws->amp_std = 0;
 }
 
-static gboolean stats_draw_event(GtkWidget *widget, cairo_t *c, struct output_panel *op)
-{
-	UNUSED(widget);
-	cairo_init(c);
-
-	struct snapshot *snst = op->snst;
-	int aw = snst->avg_window > 0 ? snst->avg_window : AVG_WINDOW_DEFAULT;
-
-	struct window_stats ws;
-	compute_window_stats(snst, aw, &ws);
-
-	cairo_text_extents_t extents;
-	cairo_set_font_size(c, OUTPUT_FONT * 0.45);
-	cairo_text_extents(c, "0", &extents);
-	double line_h = extents.height * 1.5;
-	double y0 = 6;
-	double y1 = y0 + line_h;
-	double y2 = y1 + line_h;
-	double y3 = y2 + line_h;
-
-	if(ws.nsamples > 0) {
-		/* Build clipboard text (same format as display) */
-		char clipbuf[512];
-		sprintf(clipbuf,
-			"%s\n"
-			"Accuracy (secs/day): mean %+d min %+d max %+d std dev %d\n"
-			"Beat Error (ms): mean %.1f min %.1f max %.1f std dev %.1f\n"
-			"Amplitude (deg): mean %.1f min %.1f max %.1f std dev %.1f",
-		ws.is_snapshot ? "Loaded snapshot (single-shot)" : "Live window",
-			(int)round(ws.rate_mean), (int)round(ws.rate_min), (int)round(ws.rate_max), (int)round(ws.rate_std),
-			ws.be_mean, ws.be_min, ws.be_max, ws.be_std,
-			ws.amp_mean, ws.amp_min, ws.amp_max, ws.amp_std);
-
-		g_object_set_data_full(G_OBJECT(widget), "stats-text",
-			g_strdup(clipbuf), (GDestroyNotify)g_free);
-
-		/* Column positions */
-		double col_label = 8;
-		double col_mean = 200;
-		double col_min = 340;
-		double col_max = 500;
-		double col_std = 660;
-
-		/* ---- Line 1: Window info ---- */
-		cairo_set_source(c, white);
-		char vbuf[64];
-		sprintf(vbuf, ws.is_snapshot ? "Loaded snapshot (single-shot)" : "Window: %ds", aw);
-		print_s(c, col_label, y0 + extents.height, vbuf);
-
-		/* ---- Line 2: Rate ---- */
-		cairo_set_source(c, green);
-		sprintf(vbuf, "Accuracy (secs/day):");
-		print_s(c, col_label, y1 + extents.height, vbuf);
-		cairo_set_source(c, white);
-		sprintf(vbuf, "mean %+d", (int)round(ws.rate_mean));
-		print_s(c, col_mean, y1 + extents.height, vbuf);
-		sprintf(vbuf, "min %+d", (int)round(ws.rate_min));
-		print_s(c, col_min, y1 + extents.height, vbuf);
-		sprintf(vbuf, "max %+d", (int)round(ws.rate_max));
-		print_s(c, col_max, y1 + extents.height, vbuf);
-		sprintf(vbuf, "std dev %d", (int)round(ws.rate_std));
-		print_s(c, col_std, y1 + extents.height, vbuf);
-
-		/* ---- Line 3: Beat Error ---- */
-		cairo_set_source(c, green);
-		sprintf(vbuf, "Beat Error (ms):");
-		print_s(c, col_label, y2 + extents.height, vbuf);
-		cairo_set_source(c, white);
-		sprintf(vbuf, "mean %.1f", ws.be_mean);
-		print_s(c, col_mean, y2 + extents.height, vbuf);
-		sprintf(vbuf, "min %.1f", ws.be_min);
-		print_s(c, col_min, y2 + extents.height, vbuf);
-		sprintf(vbuf, "max %.1f", ws.be_max);
-		print_s(c, col_max, y2 + extents.height, vbuf);
-		sprintf(vbuf, "std dev %.1f", ws.be_std);
-		print_s(c, col_std, y2 + extents.height, vbuf);
-
-		/* ---- Line 4: Amplitude ---- */
-		cairo_set_source(c, goldenrod);
-		sprintf(vbuf, "Amplitude (deg):");
-		print_s(c, col_label, y3 + extents.height, vbuf);
-		cairo_set_source(c, white);
-		sprintf(vbuf, "mean %.1f", ws.amp_mean);
-		print_s(c, col_mean, y3 + extents.height, vbuf);
-		sprintf(vbuf, "min %.1f", ws.amp_min);
-		print_s(c, col_min, y3 + extents.height, vbuf);
-		sprintf(vbuf, "max %.1f", ws.amp_max);
-		print_s(c, col_max, y3 + extents.height, vbuf);
-		sprintf(vbuf, "std dev %.1f", ws.amp_std);
-		print_s(c, col_std, y3 + extents.height, vbuf);
-	} else {
-		cairo_set_source(c, yellow);
-		cairo_set_font_size(c, OUTPUT_FONT * 0.45);
-		cairo_text_extents(c, "collecting data...", &extents);
-		double y = (OUTPUT_STATS_HEIGHT - extents.height) / 2 - extents.y_bearing;
-		cairo_move_to(c, 8, y);
-		cairo_show_text(c, "collecting data...");
-	}
-
-	return FALSE;
-}
-
 void handle_copy_stats(GtkButton *b, struct output_panel *op)
 {
 	UNUSED(b);
-	GtkWidget *widget = op->stats_drawing_area;
+	GtkWidget *widget = op->output_drawing_area;
 	gchar *text = g_object_get_data(G_OBJECT(widget), "stats-text");
 	if (text) {
 		GtkClipboard *clip = gtk_widget_get_clipboard(widget, GDK_SELECTION_CLIPBOARD);
@@ -515,13 +413,16 @@ static gboolean output_draw_event(GtkWidget *widget, cairo_t *c, struct output_p
 	struct processing_buffers *p = snst->pb;
 	int old = snst->is_old;
 
+	/* Column x-positions captured from instant labels for stats alignment */
+	double st_col[3] = {0, 0, 0};
+
 	double x = draw_watch_icon(c,snst->signal,snst->calibrate ? snst->signal==NSTEPS : snst->signal, snst->is_light);
 
 	cairo_text_extents_t extents;
 
 	cairo_set_font_size(c, OUTPUT_FONT);
 	cairo_text_extents(c,"0",&extents);
-	double y = (double)OUTPUT_WINDOW_HEIGHT/2 - extents.y_bearing - extents.height/2;
+	double y = 30 - extents.y_bearing;
 
 	if(snst->calibrate) {
 		cairo_set_source(c, white);
@@ -573,11 +474,11 @@ static gboolean output_draw_event(GtkWidget *widget, cairo_t *c, struct output_p
 				break;
 		}
 	} else {
-		char outputs[8][64];
+		char outputs[4][64];
 		if(p) {
 			int rate = round(snst->rate);
 			double be = snst->be;
-			sprintf(outputs[0], "Accuracy (secs/day) %s%d    ", rate > 0 ? "+" : rate < 0 ? "-" : "", abs(rate));
+			sprintf(outputs[0], "Accuracy (s/d) %s%d    ", rate > 0 ? "+" : rate < 0 ? "-" : "", abs(rate));
 			sprintf(outputs[1], "Beat Error (ms) %4.1f    ", be);
 			if(snst->amp > 0)
 				sprintf(outputs[2], "Amplitude (deg) %3.0f    ", snst->amp);
@@ -585,7 +486,7 @@ static gboolean output_draw_event(GtkWidget *widget, cairo_t *c, struct output_p
 				strcpy(outputs[2], "Amplitude (deg) ---    ");
 			sprintf(outputs[3], "bph %d    ", snst->guessed_bph);
 		} else {
-			strcpy(outputs[0], "Accuracy (secs/day) ---    ");
+			strcpy(outputs[0], "Accuracy (s/d) ---    ");
 			strcpy(outputs[1], "Beat Error (ms) ---    ");
 			strcpy(outputs[2], "Amplitude (deg) ---    ");
 			strcpy(outputs[3], "bph ---    ");
@@ -595,7 +496,86 @@ static gboolean output_draw_event(GtkWidget *widget, cairo_t *c, struct output_p
 		for(i=0; i<4; i++) {
 			cairo_set_source(c, i > 2 || !p || !old ? white : yellow);
 			cairo_set_font_size(c, OUTPUT_FONT);
+			if(i < 3) st_col[i] = x;
 			x = print_s(c,x,y,outputs[i]);
+		}
+	}
+
+	/* ---- Windowed stats section (below the main info line) ---- */
+	if(!snst->calibrate) {
+		int aw = snst->avg_window > 0 ? snst->avg_window : AVG_WINDOW_DEFAULT;
+		struct window_stats ws;
+		compute_window_stats(snst, aw, &ws);
+
+		if(ws.nsamples > 0) {
+			/* Build clipboard text */
+			char clipbuf[512];
+			sprintf(clipbuf,
+				"Accuracy (s/d): mean %+d min %+d max %+d std dev %d\n"
+				"Beat Error (ms):   mean %.1f min %.1f max %.1f std dev %.1f\n"
+				"Amplitude (deg):   mean %.1f min %.1f max %.1f std dev %.1f",
+				(int)round(ws.rate_mean), (int)round(ws.rate_min), (int)round(ws.rate_max), (int)round(ws.rate_std),
+				ws.be_mean, ws.be_min, ws.be_max, ws.be_std,
+				ws.amp_mean, ws.amp_min, ws.amp_max, ws.amp_std);
+
+			g_object_set_data_full(G_OBJECT(widget), "stats-text",
+				g_strdup(clipbuf), (GDestroyNotify)g_free);
+
+			cairo_text_extents_t sext;
+			cairo_set_font_size(c, OUTPUT_FONT * 0.42);
+			cairo_text_extents(c, "0", &sext);
+			double sh = sext.height * 1.5;
+
+			double stats_y0 = y > 0 ? y + sext.y_bearing + sext.height + 24 : 6 + sext.y_bearing + sext.height + 24;
+
+			/* Accuracy column header */
+/*			cairo_set_source(c, yellow);
+			cairo_set_font_size(c, OUTPUT_FONT * 0.42);
+			print_s(c, st_col[0], stats_y0, "Accuracy");
+*/
+			cairo_set_source(c, white);
+			double srow = stats_y0 + sh;
+			char sbuf[64];
+			sprintf(sbuf, "mean %+d", (int)round(ws.rate_mean));
+			print_s(c, st_col[0], srow, sbuf); srow += sh;
+			sprintf(sbuf, "min %+d", (int)round(ws.rate_min));
+			print_s(c, st_col[0], srow, sbuf); srow += sh;
+			sprintf(sbuf, "max %+d", (int)round(ws.rate_max));
+			print_s(c, st_col[0], srow, sbuf); srow += sh;
+			sprintf(sbuf, "std dev %d", (int)round(ws.rate_std));
+			print_s(c, st_col[0], srow, sbuf);
+
+			/* Beat Error column */
+/*			cairo_set_source(c, blue);
+			cairo_set_font_size(c, OUTPUT_FONT * 0.42);
+			print_s(c, st_col[1], stats_y0, "Beat Error");
+*/
+			cairo_set_source(c, white);
+			srow = stats_y0 + sh;
+			sprintf(sbuf, "mean %.1f", ws.be_mean);
+			print_s(c, st_col[1], srow, sbuf); srow += sh;
+			sprintf(sbuf, "min %.1f", ws.be_min);
+			print_s(c, st_col[1], srow, sbuf); srow += sh;
+			sprintf(sbuf, "max %.1f", ws.be_max);
+			print_s(c, st_col[1], srow, sbuf); srow += sh;
+			sprintf(sbuf, "std dev %.1f", ws.be_std);
+			print_s(c, st_col[1], srow, sbuf);
+
+			/* Amplitude column */
+/*			cairo_set_source(c, red);
+			cairo_set_font_size(c, OUTPUT_FONT * 0.42);
+			print_s(c, st_col[2], stats_y0, "Amplitude");
+*/
+			cairo_set_source(c, white);
+			srow = stats_y0 + sh;
+			sprintf(sbuf, "mean %.1f", ws.amp_mean);
+			print_s(c, st_col[2], srow, sbuf); srow += sh;
+			sprintf(sbuf, "min %.1f", ws.amp_min);
+			print_s(c, st_col[2], srow, sbuf); srow += sh;
+			sprintf(sbuf, "max %.1f", ws.amp_max);
+			print_s(c, st_col[2], srow, sbuf); srow += sh;
+			sprintf(sbuf, "std dev %.1f", ws.amp_std);
+			print_s(c, st_col[2], srow, sbuf);
 		}
 	}
 #ifdef DEBUG
@@ -1245,6 +1225,14 @@ static void handle_save_as_image(GtkMenuItem *item, struct output_panel *op)
 	if (!op || !op->snst || !op->snst->pb)
 		return;
 
+	/* Switch to the tab being screenshotted */
+	GtkWidget *notebook = gtk_widget_get_parent(op->panel);
+	if(notebook) {
+		gint page = gtk_notebook_page_num(GTK_NOTEBOOK(notebook), op->panel);
+		if(page >= 0)
+			gtk_notebook_set_current_page(GTK_NOTEBOOK(notebook), page);
+	}
+
 	// Get the selected orientation from the menu item's data
 	const char *orientation = g_object_get_data(G_OBJECT(item), "orientation");
 	if (!orientation)
@@ -1299,6 +1287,29 @@ static void handle_save_as_image(GtkMenuItem *item, struct output_panel *op)
 				cairo_destroy(cr);
 				cairo_surface_destroy(surface);
 			}
+
+			/* Rename the tab to the saved filename (strip path + .png) */
+			char *bn = g_path_get_basename(chosen_filename);
+			if(bn) {
+				/* Strip trailing ".png" if present */
+				size_t len = strlen(bn);
+				if(len > 4 && !g_ascii_strcasecmp(bn + len - 4, ".png"))
+					bn[len - 4] = '\0';
+
+				free(g_object_get_data(G_OBJECT(op->panel), "tab-name"));
+				g_object_set_data(G_OBJECT(op->panel), "tab-name", strdup(bn));
+				GtkLabel *label = g_object_get_data(G_OBJECT(op->panel), "tab-label");
+				if(label)
+					gtk_label_set_text(label, bn);
+
+				/* Update the snapshot name entry field if it's the current tab */
+				GtkWidget *toplevel = gtk_widget_get_toplevel(op->panel);
+				GtkWidget *snapshot_name_entry = g_object_get_data(G_OBJECT(toplevel), "snapshot-name-entry");
+				if(snapshot_name_entry)
+					gtk_entry_set_text(GTK_ENTRY(snapshot_name_entry), bn);
+
+				g_free(bn);
+			}
 			
 			g_free(chosen_filename);
 		}
@@ -1351,15 +1362,6 @@ struct output_panel *init_output_panel(struct computer *comp, struct snapshot *s
 	g_signal_connect(op->output_drawing_area, "query-tooltip", G_CALLBACK(output_query_tooltip), op);
 	gtk_widget_set_has_tooltip(op->output_drawing_area, TRUE);
 
-	// Windowed stats area (below main info)
-	op->stats_drawing_area = gtk_drawing_area_new();
-	gtk_widget_set_size_request(op->stats_drawing_area, 0, OUTPUT_STATS_HEIGHT);
-	gtk_box_pack_start(GTK_BOX(op->panel), op->stats_drawing_area, FALSE, TRUE, 0);
-	g_signal_connect(op->stats_drawing_area, "draw", G_CALLBACK(stats_draw_event), op);
-	gtk_widget_set_events(op->stats_drawing_area, GDK_EXPOSURE_MASK);
-	gtk_widget_add_events(op->stats_drawing_area, GDK_BUTTON_PRESS_MASK);
-	g_signal_connect(op->stats_drawing_area, "button-press-event", G_CALLBACK(handle_panel_button_press), op);
-
 	GtkWidget *hbox2 = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
 	gtk_box_pack_start(GTK_BOX(op->panel), hbox2, TRUE, TRUE, 0);
 
@@ -1368,7 +1370,7 @@ struct output_panel *init_output_panel(struct computer *comp, struct snapshot *s
 
 	// Paperstrip
 	GtkWidget *paperstrip_title = gtk_label_new(NULL);
-	gtk_label_set_markup(GTK_LABEL(paperstrip_title), "<b><span color='black' size='18000'>paperstrip</span></b>");
+	gtk_label_set_markup(GTK_LABEL(paperstrip_title), "<b><span color='black' size='18000'>Paperstrip</span></b>");
 	gtk_box_pack_start(GTK_BOX(vbox2), paperstrip_title, FALSE, FALSE, 0);
 	op->paperstrip_drawing_area = gtk_drawing_area_new();
 	gtk_widget_set_size_request(op->paperstrip_drawing_area, 300, 0);
@@ -1421,7 +1423,7 @@ struct output_panel *init_output_panel(struct computer *comp, struct snapshot *s
 
 	// Tic waveform area
 	GtkWidget *tic_title = gtk_label_new(NULL);
-	gtk_label_set_markup(GTK_LABEL(tic_title), "<b><span color='black' size='18000'>tic waveform</span></b>");
+	gtk_label_set_markup(GTK_LABEL(tic_title), "<b><span color='black' size='18000'>Tic Waveform</span></b>");
 	gtk_box_pack_start(GTK_BOX(vbox3), tic_title, FALSE, FALSE, 0);
 	op->tic_drawing_area = gtk_drawing_area_new();
 	gtk_box_pack_start(GTK_BOX(vbox3), op->tic_drawing_area, TRUE, TRUE, 0);
@@ -1432,7 +1434,7 @@ struct output_panel *init_output_panel(struct computer *comp, struct snapshot *s
 
 	// Toc waveform area
 	GtkWidget *toc_title = gtk_label_new(NULL);
-	gtk_label_set_markup(GTK_LABEL(toc_title), "<b><span color='black' size='18000'>toc waveform</span></b>");
+	gtk_label_set_markup(GTK_LABEL(toc_title), "<b><span color='black' size='18000'>Toc Waveform</span></b>");
 	gtk_box_pack_start(GTK_BOX(vbox3), toc_title, FALSE, FALSE, 0);
 	op->toc_drawing_area = gtk_drawing_area_new();
 	gtk_box_pack_start(GTK_BOX(vbox3), op->toc_drawing_area, TRUE, TRUE, 0);
@@ -1443,7 +1445,7 @@ struct output_panel *init_output_panel(struct computer *comp, struct snapshot *s
 
 	// Period waveform area
 	GtkWidget *period_title = gtk_label_new(NULL);
-	gtk_label_set_markup(GTK_LABEL(period_title), "<b><span color='black' size='18000'>period waveform</span></b>");
+	gtk_label_set_markup(GTK_LABEL(period_title), "<b><span color='black' size='18000'>Period Waveform</span></b>");
 	gtk_box_pack_start(GTK_BOX(vbox3), period_title, FALSE, FALSE, 0);
 	op->period_drawing_area = gtk_drawing_area_new();
 	gtk_box_pack_start(GTK_BOX(vbox3), op->period_drawing_area, TRUE, TRUE, 0);
