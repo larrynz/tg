@@ -4,7 +4,7 @@ Tg is a desktop timegrapher for mechanical watches. It listens to the ticking so
 
 ## Download
 
-- Windows, Linux MacOS installers available https://github.com/larrynz/tg/releases
+- Windows, Linux, MacOS installers available https://github.com/larrynz/tg/releases
 
 ## What You Need
 
@@ -106,7 +106,7 @@ make
 
 ### macOS
 
-macOS installer provided but untested (I don't have a mac). 
+macOS installer provided but untested. 
 If you work on macOS, expect to verify your GTK, PortAudio, and microphone permission setup manually.
 
 ## Before You Trust The Numbers
@@ -127,10 +127,6 @@ Known maintenance realities today (according to https://github.com/agrigera/tg):
 - external discussions about Tg are generally positive about the tool itself
 - users repeatedly ask for better microphone and calibration guidance
 - packaging and maintenance visibility are spread across multiple forks and downstream packages
-
-Repository-tracked review notes live under [docs/issues](docs/issues).
-
-Recent implementation progress is tracked in [docs/issues/backport-progress-2026-03-22.md](docs/issues/backport-progress-2026-03-22.md).
 
 ## License
 

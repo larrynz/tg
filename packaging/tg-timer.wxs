@@ -1,10 +1,10 @@
 <?xml version='1.0' encoding='windows-1252'?>
 <Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
   <Product Name='Tg' Id='6bf7bc63-3dfe-4a40-bcbc-7bc6f9702615' UpgradeCode='088fdac7-fc91-4881-a2db-eed04425a207'
-    Language='1033' Codepage='1252' Version='0.8.0' Manufacturer='Marcello Mamino'>
+    Language='1033' Codepage='1252' Version='0.8.4' Manufacturer='Marcello Mamino'>
 
     <Package Id='*' Keywords='Installer'
-      Description='Tg 0.8.0 Installer'
+      Description='Tg 0.8.4 Installer'
       Manufacturer='Marcello Mamino'
       InstallerVersion='100' Languages='1033' Compressed='yes' SummaryCodepage='1252' />
 
@@ -19,8 +19,8 @@
 
           <Component Id='MainExecutable' Guid='9572b2c4-22f4-455e-87a3-702776d7ebff'>
             <File Id='TgEXE' Name='tg.exe' DiskId='1' Source='tg.exe' KeyPath='yes'>
-              <Shortcut Id='startmenuTg' Directory='ProgramMenuDir' Name='Tg 0.8.0' WorkingDirectory='INSTALLDIR' Icon='tg.exe' IconIndex='0' Advertise='yes' />
-              <Shortcut Id='desktopTg' Directory='DesktopFolder' Name='Tg 0.8.0' WorkingDirectory='INSTALLDIR' Icon='tg.exe' IconIndex='0' Advertise='yes' />
+              <Shortcut Id='startmenuTg' Directory='ProgramMenuDir' Name='Tg 0.8.4' WorkingDirectory='INSTALLDIR' Icon='tg.exe' IconIndex='0' Advertise='yes' />
+              <Shortcut Id='desktopTg' Directory='DesktopFolder' Name='Tg 0.8.4' WorkingDirectory='INSTALLDIR' Icon='tg.exe' IconIndex='0' Advertise='yes' />
             </File>
             <File Id='TgDocumentICO' Name='tg-document.ico' Source='tg-document.ico' />
             <ProgId Id='TgjFile' Description='Tg data file' Icon='TgDocumentICO'>
@@ -42,7 +42,7 @@
       </Directory>
 
       <Directory Id='ProgramMenuFolder' Name='Programs'>
-        <Directory Id='ProgramMenuDir' Name='Tg 0.8.0'>
+        <Directory Id='ProgramMenuDir' Name='Tg 0.8.4'>
           <Component Id='ProgramMenuDir' Guid='bcacf5b5-8ff8-4b40-b73d-6bb2b443194e'>
             <RemoveFolder Id='ProgramMenuDir' On='uninstall' />
             <RegistryValue Root='HKCU' Key='Software\[Manufacturer]\[ProductName]' Type='string' Value='' KeyPath='yes' />

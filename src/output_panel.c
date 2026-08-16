@@ -330,33 +330,45 @@ static gboolean output_query_tooltip(GtkWidget *widget, gint x, gint y, gboolean
 	UNUSED(widget);
 	UNUSED(y);
 	UNUSED(keyboard_mode);
-	
+
 	struct snapshot *snst = op->snst;
 	if (!snst || !snst->pb)
 		return FALSE;
-	
-	// Approximate positions of each field in the output display
-	// Watch icon takes ~OUTPUT_WINDOW_HEIGHT width
-	int icon_width = OUTPUT_WINDOW_HEIGHT;
-	int field_width = 200;
-	int field_start = icon_width + 10;
-	
-	// s/d field
-	if (x >= field_start && x < field_start + field_width) {
+
+	/* Use actual pixel boundaries captured during the last draw */
+	double *fs = g_object_get_data(G_OBJECT(widget), "field-starts");
+	double *ir = g_object_get_data(G_OBJECT(widget), "icon-right");
+	double icon_width = ir ? *ir : OUTPUT_WINDOW_HEIGHT;
+
+	/* Watch icon area - signal quality */
+	if (x >= 0 && x < icon_width) {
+		const char *signal_quality;
+		if (snst->signal == 0) signal_quality = "No signal detected";
+		else if (snst->signal < NSTEPS / 2) signal_quality = "Weak signal (coarse filter only)";
+		else if (snst->signal < NSTEPS) signal_quality = "Moderate signal";
+		else signal_quality = "Strong signal (all filter stages passed)";
+		char buf[256];
+		snprintf(buf, sizeof(buf), "Signal quality: %s (%d/%d stages)", signal_quality, snst->signal, NSTEPS);
+		gtk_tooltip_set_text(tooltip, buf);
+		return TRUE;
+	}
+
+	if (!fs) return FALSE;
+
+	/* Accuracy (s/d) field: fs[0] .. fs[1] */
+	if (x >= fs[0] && x < fs[1]) {
 		gtk_tooltip_set_text(tooltip, "Rate (seconds per day). Positive = fast, negative = slow.");
 		return TRUE;
 	}
-	field_start += field_width;
-	
-	// Beat Error field
-	if (x >= field_start && x < field_start + field_width) {
+
+	/* Beat Error field: fs[1] .. fs[2] */
+	if (x >= fs[1] && x < fs[2]) {
 		gtk_tooltip_set_text(tooltip, "Beat error (milliseconds). Difference between tic and toc duration.");
 		return TRUE;
 	}
-	field_start += field_width;
-	
-	// Amplitude field
-	if (x >= field_start && x < field_start + field_width) {
+
+	/* Amplitude field: fs[2] .. fs[3] */
+	if (x >= fs[2] && x < fs[3]) {
 		if (snst->amp > 0) {
 			char buf[256];
 			snprintf(buf, sizeof(buf), "Amplitude: %.0f degrees. Lift angle: %.0f°.", snst->amp, snst->la);
@@ -380,27 +392,13 @@ static gboolean output_query_tooltip(GtkWidget *widget, gint x, gint y, gboolean
 		}
 		return TRUE;
 	}
-	field_start += field_width;
-	
-	// bph field
-	if (x >= field_start && x < field_start + field_width) {
+
+	/* bph field: fs[3] .. fs[4] */
+	if (x >= fs[3] && x < fs[4]) {
 		gtk_tooltip_set_text(tooltip, "Beats per hour (BPH). Auto-detected or manually set.");
 		return TRUE;
 	}
-	
-	// Watch icon area - signal quality
-	if (x >= 0 && x < icon_width) {
-		const char *signal_quality;
-		if (snst->signal == 0) signal_quality = "No signal detected";
-		else if (snst->signal < NSTEPS / 2) signal_quality = "Weak signal (coarse filter only)";
-		else if (snst->signal < NSTEPS) signal_quality = "Moderate signal";
-		else signal_quality = "Strong signal (all filter stages passed)";
-		char buf[256];
-		snprintf(buf, sizeof(buf), "Signal quality: %s (%d/%d stages)", signal_quality, snst->signal, NSTEPS);
-		gtk_tooltip_set_text(tooltip, buf);
-		return TRUE;
-	}
-	
+
 	return FALSE;
 }
 
@@ -417,6 +415,7 @@ static gboolean output_draw_event(GtkWidget *widget, cairo_t *c, struct output_p
 	double st_col[3] = {0, 0, 0};
 
 	double x = draw_watch_icon(c,snst->signal,snst->calibrate ? snst->signal==NSTEPS : snst->signal, snst->is_light);
+	double icon_right = x;  /* for tooltip hit-testing */
 
 	cairo_text_extents_t extents;
 
@@ -493,12 +492,23 @@ static gboolean output_draw_event(GtkWidget *widget, cairo_t *c, struct output_p
 		}
 
 		int i;
+		double field_start[5] = {0, 0, 0, 0, 0};
+		field_start[0] = x;
 		for(i=0; i<4; i++) {
 			cairo_set_source(c, i > 2 || !p || !old ? white : yellow);
 			cairo_set_font_size(c, OUTPUT_FONT);
 			if(i < 3) st_col[i] = x;
 			x = print_s(c,x,y,outputs[i]);
+			if(i < 4) field_start[i+1] = x;
 		}
+
+		/* Publish field boundaries for accurate tooltip hit-testing */
+		g_object_set_data_full(G_OBJECT(widget), "field-starts",
+			g_memdup2(field_start, sizeof(field_start)),
+			(GDestroyNotify)g_free);
+		g_object_set_data_full(G_OBJECT(widget), "icon-right",
+			g_memdup2(&icon_right, sizeof(double)),
+			(GDestroyNotify)g_free);
 	}
 
 	/* ---- Windowed stats section (below the main info line) ---- */
@@ -1324,8 +1334,8 @@ static gboolean handle_panel_button_press(GtkWidget *widget, GdkEventButton *eve
 		GtkWidget *menu = gtk_menu_new();
 
 		const char *orientations[] = {
-			"Dial Up", "Dial Down", "12PM Down", 
-			"3PM Down", "6PM Down", "9PM Down"
+			"Dial Up", "Dial Down", "12 Hr Up",
+			"9 Hr Up", "6 Hr Up", "3 Hr Up"
 		};
 
 		for (int i = 0; i < 6; i++) {
