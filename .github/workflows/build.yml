@@ -109,6 +109,7 @@ jobs:
             mingw-w64-x86_64-portaudio
             mingw-w64-x86_64-fftw
             mingw-w64-x86_64-autotools
+            mingw-w64-x86_64-ntldd
             make
 
       - name: Install WiX Toolset
@@ -141,10 +142,14 @@ jobs:
           cp icons/tg-document.ico msi/
           # Copy WiX source file
           cp packaging/tg-timer.wxs msi/
-          # Copy GTK/PortAudio/FFTW DLLs from MSYS2
-          cp /mingw64/bin/*.dll msi/resources/ 2>/dev/null || true
-          # Remove non-dependency DLLs to keep installer small
-          ls msi/resources/*.dll 2>/dev/null | xargs -I {} basename {} | grep -vE "(gtk|gdk|gobject|glib|gio|pango|cairo|atk|portaudio|fftw|intl|iconv|winpthread|gcc_s|stdc\+\+)" | xargs -I {} rm msi/resources/{} 2>/dev/null || true
+          # Collect the full, recursive DLL dependency closure of tg-timer.exe.
+          # ntldd walks the real import table, so all transitive deps are captured
+          # (pcre2, epoxy, fontconfig, fribidi, pixman, freetype, libpng, ...).
+          ntldd -R tg-timer.exe | awk '/mingw64/{print $3}' | sort -u | \
+            while read -r dll; do cp "$dll" msi/resources/; done
+          # Sanity check: list how many DLLs were staged
+          ls msi/resources/ | wc -l
+          ls msi/resources/
 
       - name: Generate WiX fragments
         shell: cmd
